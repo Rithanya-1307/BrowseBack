@@ -1,0 +1,738 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232563eb' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z'/><path d='M6 6h10'/><path d='M6 10h10'/><path d='M9 16l-3-3 3-3'/></svg>" />
+    <title>BrowseBack — A simpler way to explore your browsing history</title>
+    <meta name="description" content="BrowseBack is a clean, minimalist browser history simulator and research tool powered by custom algorithmic data structures." />
+    
+    <!-- Google Fonts: Inter & JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    
+    <!-- Stylesheet -->
+    <link rel="stylesheet" href="./css/styles.css" />
+  </head>
+  <body>
+    <!-- Consistent Application Header -->
+    <header class="app-header">
+      <div class="header-container">
+        <div class="brand-wrapper" id="brand-home-link" role="button" tabindex="0" aria-label="BrowseBack Home">
+          <div class="brand-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 12H5M12 19l-7-7 7-7"/>
+            </svg>
+          </div>
+          <div class="brand-info">
+            <span class="brand-title">BrowseBack</span>
+          </div>
+        </div>
+
+        <!-- Navigation Tabs -->
+        <nav class="nav-tabs" role="tablist" aria-label="Main Navigation">
+          <button class="nav-tab-btn active" id="tab-home" data-target="page-home" role="tab" aria-selected="true" aria-controls="page-home">
+            Dashboard
+          </button>
+          <button class="nav-tab-btn" id="tab-browser" data-target="page-browser" role="tab" aria-selected="false" aria-controls="page-browser">
+            Browser
+          </button>
+          <button class="nav-tab-btn" id="tab-history" data-target="page-history" role="tab" aria-selected="false" aria-controls="page-history">
+            History
+          </button>
+          <button class="nav-tab-btn" id="tab-search" data-target="page-search" role="tab" aria-selected="false" aria-controls="page-search">
+            Search
+          </button>
+          <button class="nav-tab-btn" id="tab-performance" data-target="page-performance" role="tab" aria-selected="false" aria-controls="page-performance">
+            Performance
+          </button>
+        </nav>
+
+        <!-- Status Indicator -->
+        <div class="header-status">
+          <div class="status-badge" id="header-status-badge">
+            <span class="status-dot" id="header-status-dot"></span>
+            <span id="header-status-text">No history imported</span>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="main-wrapper">
+      
+      <!-- ===================================================================
+           PAGE 1: My Browsing Dashboard
+           =================================================================== -->
+      <section class="page-view active" id="page-home" role="tabpanel" aria-labelledby="tab-home">
+        
+        <!-- Welcome Section -->
+        <div class="dashboard-welcome">
+          <div class="welcome-text-group">
+            <h1 class="welcome-heading">Welcome to BrowseBack</h1>
+            <p class="welcome-subtitle">Your browsing activity, at a glance.</p>
+          </div>
+
+          <!-- Chrome Extension Connection Cluster -->
+          <div class="connection-cluster" id="connection-cluster">
+            <div class="connection-status-pill status-disconnected" id="ext-status-pill" role="status" aria-live="polite">
+              <span class="status-indicator-dot" id="ext-status-dot"></span>
+              <span class="status-indicator-label" id="ext-status-label">Extension Disconnected</span>
+            </div>
+
+            <!-- Disconnected State Action Button -->
+            <button type="button" class="btn btn-primary" id="btn-connect-chrome">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"></circle>
+                <circle cx="12" cy="12" r="4"></circle>
+                <line x1="4.93" y1="4.93" x2="9.17" y2="9.17"></line>
+                <line x1="14.83" y1="14.83" x2="19.07" y2="19.07"></line>
+                <line x1="14.83" y1="9.17" x2="19.07" y2="4.93"></line>
+                <line x1="4.93" y1="19.07" x2="9.17" y2="14.83"></line>
+              </svg>
+              <span id="btn-connect-chrome-text">Connect Chrome</span>
+              <span class="spinner" id="connect-chrome-spinner" style="display: none; width: 13px; height: 13px; border-top-color: #ffffff;"></span>
+            </button>
+
+            <!-- Connected State Controls (Shown when connected) -->
+            <div class="connected-actions-group" id="connected-actions" style="display: none;">
+              <div class="time-range-wrapper">
+                <label for="dashboard-time-range" class="sr-only">History Time Range</label>
+                <select id="dashboard-time-range" class="select-input select-sm" aria-label="Select history time range">
+                  <option value="86400000">Past 24 Hours</option>
+                  <option value="604800000" selected>Past 7 Days</option>
+                  <option value="2592000000">Past 30 Days</option>
+                  <option value="7776000000">Past 90 Days</option>
+                  <option value="0">All Available History</option>
+                </select>
+              </div>
+
+              <button type="button" class="btn btn-outline" id="btn-refresh-data" title="Refresh browsing data from Chrome">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" id="refresh-icon" aria-hidden="true">
+                  <polyline points="23 4 23 10 17 10"></polyline>
+                  <polyline points="1 20 1 14 7 14"></polyline>
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                </svg>
+                <span id="btn-refresh-text">Refresh Data</span>
+                <span class="spinner" id="refresh-spinner" style="display: none; width: 13px; height: 13px; border-top-color: var(--color-back);"></span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Connection Feedback / Permission Notice Banner -->
+        <div class="dashboard-notice-banner" id="dashboard-notice" style="display: none;" role="region" aria-live="polite">
+          <div class="notice-icon-box" id="notice-icon-box" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="8" x2="12" y2="12"></line>
+              <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            </svg>
+          </div>
+          <div class="notice-content">
+            <strong id="notice-title">Notice</strong>
+            <p id="notice-desc">Description</p>
+          </div>
+          <div class="notice-actions">
+            <button type="button" class="btn btn-primary btn-sm" id="btn-notice-action" style="display: none;">Action</button>
+            <button type="button" class="btn btn-subtle btn-sm" id="btn-dismiss-notice" aria-label="Dismiss banner">Dismiss</button>
+          </div>
+        </div>
+
+        <!-- Summary Cards Grid (4 Equal Minimal Cards) -->
+        <div class="dashboard-cards-grid">
+          <!-- Card 1: Unique Websites -->
+          <div class="metric-card" id="card-unique-websites">
+            <div class="metric-card-header">
+              <span class="metric-card-label">Unique Websites</span>
+              <div class="metric-card-icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="2" y1="12" x2="22" y2="12"></line>
+                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                </svg>
+              </div>
+            </div>
+            <div class="metric-card-value" id="dash-unique-websites">--</div>
+            <div class="metric-card-subtext" id="dash-subtext-unique">Distinct domains visited</div>
+          </div>
+
+          <!-- Card 2: Total Visits -->
+          <div class="metric-card" id="card-total-visits">
+            <div class="metric-card-header">
+              <span class="metric-card-label">Total Visits</span>
+              <div class="metric-card-icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                </svg>
+              </div>
+            </div>
+            <div class="metric-card-value" id="dash-total-visits">--</div>
+            <div class="metric-card-subtext" id="dash-subtext-visits">Recorded visit events</div>
+          </div>
+
+          <!-- Card 3: Most Visited Website -->
+          <div class="metric-card" id="card-most-visited">
+            <div class="metric-card-header">
+              <span class="metric-card-label">Most Visited Website</span>
+              <div class="metric-card-icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+                </svg>
+              </div>
+            </div>
+            <div class="metric-card-value domain-highlight" id="dash-most-visited" title="Most Visited Domain">--</div>
+            <div class="metric-card-subtext" id="dash-subtext-most-visited">Highest visit frequency</div>
+          </div>
+
+          <!-- Card 4: Latest Visit -->
+          <div class="metric-card" id="card-latest-visit">
+            <div class="metric-card-header">
+              <span class="metric-card-label">Latest Visit</span>
+              <div class="metric-card-icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <polyline points="12 6 12 12 16 14"></polyline>
+                </svg>
+              </div>
+            </div>
+            <div class="metric-card-value domain-highlight" id="dash-latest-visit" title="Latest Visited Domain">--</div>
+            <div class="metric-card-subtext" id="dash-subtext-latest-visit">Most recent recorded time</div>
+          </div>
+        </div>
+
+        <!-- Frequently Visited Websites Section -->
+        <div class="frequent-sites-card">
+          <div class="frequent-sites-header">
+            <div>
+              <h2 class="section-title">Frequently Visited Websites</h2>
+              <p class="section-subtitle">Top domains ranked by recorded visit frequency</p>
+            </div>
+          </div>
+
+          <!-- List container: renders up to 5 items or clean empty state -->
+          <div class="frequent-sites-list" id="frequent-sites-list">
+            <div class="empty-dashboard-state" id="frequent-empty-state">
+              <div class="empty-state-icon" aria-hidden="true">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon>
+                </svg>
+              </div>
+              <p class="empty-state-title">No browsing activity recorded yet</p>
+              <p class="empty-state-desc">Connect your Chrome extension or refresh data to view your top 5 most visited websites.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Secondary Card: Manual JSON Import & Extension Guide (Preserves existing capabilities) -->
+        <div class="dashboard-secondary-card">
+          <div class="secondary-card-header" id="secondary-tools-toggle" role="button" tabindex="0" aria-expanded="false" aria-controls="secondary-tools-content">
+            <div style="display: flex; align-items: center; gap: 0.6rem;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              </svg>
+              <span>Manual JSON Import &amp; Extension Setup</span>
+            </div>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="secondary-tools-chevron">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </div>
+
+          <div class="secondary-card-body" id="secondary-tools-content" style="display: none;">
+            <!-- Dropzone -->
+            <input type="file" id="history-file-input" accept=".json,application/json" style="display: none;" aria-label="Select JSON browsing history file" />
+            <div class="import-dropzone" id="import-dropzone" role="button" tabindex="0" aria-label="Click or drag and drop to import JSON history file">
+              <div class="dropzone-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                  <line x1="12" y1="18" x2="12" y2="12"></line>
+                  <line x1="9" y1="15" x2="12" y2="12"></line>
+                  <line x1="15" y1="15" x2="12" y2="12"></line>
+                </svg>
+              </div>
+              <div>
+                <div class="dropzone-text">Click or drag a JSON file here</div>
+                <div class="dropzone-hint">Supports custom BrowseBack JSON and Google Chrome Takeout format</div>
+              </div>
+              <button type="button" class="btn btn-primary" id="btn-browse-file">
+                Import File
+              </button>
+            </div>
+
+            <div style="text-align: center; margin-top: 0.85rem;">
+              <button type="button" class="btn btn-subtle btn-sm" id="btn-toggle-paste-json">
+                Or paste JSON directly
+              </button>
+            </div>
+            <div id="paste-json-container" style="display: none; margin-top: 1rem;">
+              <textarea id="paste-json-textarea" class="text-input" style="width: 100%; height: 110px; font-family: var(--font-mono); font-size: 0.82rem;" placeholder='[&#10;  {&#10;    "url": "https://developer.mozilla.org",&#10;    "title": "MDN Web Docs",&#10;    "visitedAt": "2026-10-15T10:00:00.000Z"&#10;  }&#10;]' aria-label="Paste JSON history records"></textarea>
+              <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem;">
+                <button type="button" class="btn btn-outline btn-sm" id="btn-cancel-paste-json">Cancel</button>
+                <button type="button" class="btn btn-primary btn-sm" id="btn-submit-paste-json">Process Pasted JSON</button>
+              </div>
+            </div>
+
+            <!-- Import Status Feedback -->
+            <div class="import-status-area" id="import-status-area" aria-live="polite"></div>
+
+            <!-- Setup Instructions Details -->
+            <div style="margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--border-subtle); font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6;">
+              <strong style="color: var(--text-main); display: block; margin-bottom: 0.35rem;">Chrome Extension Setup:</strong>
+              <ol style="padding-left: 1.25rem;">
+                <li>Open <code>chrome://extensions</code> in Google Chrome.</li>
+                <li>Turn on <strong>Developer mode</strong> (toggle switch in the top-right corner).</li>
+                <li>Click <strong>Load unpacked</strong> and select the directory: <code>e:\BrowseBack\browser-extension</code>.</li>
+                <li>Return to BrowseBack and click <button type="button" class="btn btn-subtle btn-sm" id="btn-recheck-ext" style="padding: 0.15rem 0.5rem; margin-left: 0.25rem;">Recheck Extension</button>.</li>
+              </ol>
+              <div style="margin-top: 0.85rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                <label for="ext-id-input" style="font-weight: 500; font-size: 0.82rem; color: var(--text-main);">Extension ID:</label>
+                <input type="text" id="ext-id-input" class="text-input" style="flex: 1; min-width: 260px; max-width: 380px; font-family: var(--font-mono); font-size: 0.8rem; padding: 0.3rem 0.6rem;" placeholder="Auto-detected or enter 32-char ID" spellcheck="false" />
+                <button type="button" class="btn btn-outline btn-sm" id="btn-save-ext-id">Save &amp; Connect</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ===================================================================
+           PAGE 2: Browser Simulator
+           =================================================================== -->
+      <section class="page-view" id="page-browser" role="tabpanel" aria-labelledby="tab-browser">
+        <div class="page-header">
+          <h1 class="page-title">Browser Simulator</h1>
+          <p class="page-subtitle">Simulate real back and forward web navigation powered by custom stack structures.</p>
+        </div>
+
+        <!-- Browser Toolbar -->
+        <div class="browser-chrome">
+          <div class="nav-controls">
+            <!-- Back Button: Blue -->
+            <button class="btn btn-nav-back" id="btn-browser-back" title="Back" aria-label="Go Back in browsing history" disabled>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="19" y1="12" x2="5" y2="12"></line>
+                <polyline points="12 19 5 12 12 5"></polyline>
+              </svg>
+              <span>Back</span>
+            </button>
+
+            <!-- Forward Button: Green -->
+            <button class="btn btn-nav-forward" id="btn-browser-forward" title="Forward" aria-label="Go Forward in browsing history" disabled>
+              <span>Forward</span>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+                <polyline points="12 5 19 12 12 19"></polyline>
+              </svg>
+            </button>
+          </div>
+
+          <!-- Address bar -->
+          <div class="address-bar-container">
+            <svg class="address-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="2" y1="12" x2="22" y2="12"></line>
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+            </svg>
+            <input type="url" class="address-input" id="browser-address-input" placeholder="Enter page URL (e.g. https://developer.mozilla.org)" aria-label="Browser Address Bar" />
+          </div>
+
+          <button class="btn btn-primary" id="btn-browser-go">
+            Go
+          </button>
+        </div>
+
+        <!-- Action Status Message -->
+        <div class="action-status-banner" id="browser-action-status" aria-live="polite">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="16" x2="12" y2="12"></line>
+            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+          </svg>
+          <span id="browser-action-text">Browser session ready. Enter a URL above or import history.</span>
+        </div>
+
+        <!-- Current Page Card with subtle orange accent -->
+        <div class="current-page-card" id="current-page-display">
+          <div class="current-page-badge">
+            <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background-color: var(--color-current);"></span>
+            Current Page
+          </div>
+          <h2 class="current-page-title" id="current-page-title">No page loaded</h2>
+          <div class="current-page-url" id="current-page-url">Type a URL in the address bar and click Go to start browsing.</div>
+          
+          <div class="current-page-meta">
+            <div class="meta-item">
+              <span class="meta-label">Visit count:</span>
+              <span class="meta-value" id="current-page-visits">0</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Last visited:</span>
+              <span class="meta-value" id="current-page-time">--</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Navigation mode:</span>
+              <span class="meta-value">Simulation</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live Visualisations for Back and Forward -->
+        <div class="stacks-grid">
+          <!-- Back Stack Panel -->
+          <div class="stack-card">
+            <div class="stack-header">
+              <div class="stack-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-back)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="19" y1="12" x2="5" y2="12"></line>
+                  <polyline points="12 19 5 12 12 5"></polyline>
+                </svg>
+                <span>Back</span>
+              </div>
+              <span class="stack-badge back-badge" id="back-stack-count">0 pages</span>
+            </div>
+            <div class="stack-list" id="back-stack-list">
+              <div class="empty-state-text">Back history is empty</div>
+            </div>
+          </div>
+
+          <!-- Forward Stack Panel -->
+          <div class="stack-card">
+            <div class="stack-header">
+              <div class="stack-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-forward)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="5" y1="12" x2="19" y2="12"></line>
+                  <polyline points="12 5 19 12 12 19"></polyline>
+                </svg>
+                <span>Forward</span>
+              </div>
+              <span class="stack-badge forward-badge" id="forward-stack-count">0 pages</span>
+            </div>
+            <div class="stack-list" id="forward-stack-list">
+              <div class="empty-state-text">Forward history is empty</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================================================================
+           PAGE 3: History
+           =================================================================== -->
+      <section class="page-view" id="page-history" role="tabpanel" aria-labelledby="tab-history">
+        <div class="page-header">
+          <h1 class="page-title">Browsing History</h1>
+          <p class="page-subtitle">Inspect, filter, sort and manage your chronologically ordered browsing records.</p>
+        </div>
+
+        <!-- Eviction notice banner -->
+        <div class="alert alert-info" id="history-eviction-banner" style="display: none; margin-bottom: 1.25rem;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="16" x2="12" y2="12"></line>
+            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+          </svg>
+          <span id="eviction-notice-text">History limit applied: oldest records were automatically removed.</span>
+        </div>
+
+        <!-- Compact History Details Panel -->
+        <div class="history-details-card">
+          <h2 class="card-title" style="margin-bottom: 0.85rem;">History Details</h2>
+          <div class="details-grid">
+            <div class="details-col">
+              <div class="details-label">Total Records</div>
+              <div class="details-val" id="details-total-count">0</div>
+            </div>
+            <div class="details-col">
+              <div class="details-label">Earliest Record</div>
+              <div class="details-val" id="details-earliest-time">--</div>
+            </div>
+            <div class="details-col">
+              <div class="details-label">Latest Record</div>
+              <div class="details-val" id="details-latest-time">--</div>
+            </div>
+          </div>
+
+          <!-- Neighbor cards for selected record -->
+          <div class="neighbor-box" id="history-neighbors-box">
+            <div class="neighbor-card">
+              <div class="neighbor-title">Previous Page (Older)</div>
+              <div class="neighbor-name" id="neighbor-prev-title">None selected</div>
+              <div class="neighbor-url" id="neighbor-prev-url">Click any row in the table below</div>
+            </div>
+            <div class="neighbor-card">
+              <div class="neighbor-title">Next Page (Newer)</div>
+              <div class="neighbor-name" id="neighbor-next-title">None selected</div>
+              <div class="neighbor-url" id="neighbor-next-url">Click any row in the table below</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- History Toolbar -->
+        <div class="history-toolbar">
+          <div class="history-search-wrapper">
+            <input type="text" class="text-input" id="history-search-input" placeholder="Filter by title or URL..." aria-label="Filter browsing history records" />
+          </div>
+
+          <div class="history-actions">
+            <select class="select-input" id="history-sort-select" aria-label="Sort Order">
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+            </select>
+
+            <div class="limit-control">
+              <label for="history-limit-select">Size limit:</label>
+              <select class="select-input" id="history-limit-select">
+                <option value="0">Unlimited</option>
+                <option value="25">25 records</option>
+                <option value="50">50 records</option>
+                <option value="100">100 records</option>
+              </select>
+            </div>
+
+            <button class="btn btn-outline" id="btn-export-json" title="Export current history as JSON">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              Export JSON
+            </button>
+
+            <button class="btn btn-danger-outline" id="btn-clear-history" title="Clear all history">
+              Clear All
+            </button>
+          </div>
+        </div>
+
+        <!-- History Table -->
+        <div class="table-container">
+          <table class="history-table" id="history-table">
+            <thead>
+              <tr>
+                <th style="width: 45%;">Page Title &amp; URL</th>
+                <th style="width: 25%;">Visit Time</th>
+                <th style="width: 15%;">Visits</th>
+                <th style="width: 15%; text-align: right;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="history-tbody">
+              <tr>
+                <td colspan="4" class="empty-state-text" style="padding: 3rem 1rem;">
+                  No browsing history available. Import a JSON file on the Home page to populate this view.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ===================================================================
+           PAGE 4: Search & Insights
+           =================================================================== -->
+      <section class="page-view" id="page-search" role="tabpanel" aria-labelledby="tab-search">
+        <div class="page-header">
+          <h1 class="page-title">Search</h1>
+          <p class="page-subtitle">Find exact URLs or search your historical records with highlighted matching keywords.</p>
+        </div>
+
+        <!-- Sub Tabs -->
+        <div class="search-tabs">
+          <button class="search-subtab-btn active" id="subtab-find" data-section="search-sec-find">
+            Find a page
+          </button>
+          <button class="search-subtab-btn" id="subtab-keyword" data-section="search-sec-keyword">
+            Search your history
+          </button>
+        </div>
+
+        <!-- Section A: Find a page -->
+        <div class="search-content-section active" id="search-sec-find">
+          <div class="card">
+            <h2 class="card-title">Check Page Visit Status</h2>
+            <p class="card-subtitle">Enter a full or partial URL to instantly verify if it exists in your retained browsing history.</p>
+
+            <form class="input-group" id="form-find-page">
+              <input type="text" class="text-input" id="input-find-url" placeholder="Enter URL (e.g. https://en.wikipedia.org)" aria-label="URL to verify" required />
+              <button type="submit" class="btn btn-primary" id="btn-find-url">
+                Check Page
+              </button>
+            </form>
+
+            <div id="find-page-result" style="display: none;"></div>
+          </div>
+        </div>
+
+        <!-- Section B: Search your history -->
+        <div class="search-content-section" id="search-sec-keyword">
+          <div class="card">
+            <h2 class="card-title">Keyword Search</h2>
+            <p class="card-subtitle">Search page titles and URLs across your entire browsing records with highlighted matches.</p>
+
+            <form class="input-group" id="form-keyword-search">
+              <input type="text" class="text-input" id="input-keyword-search" placeholder="Enter keyword to search (e.g. documentation, github, python)" aria-label="Keyword search" required />
+              <button type="submit" class="btn btn-primary" id="btn-keyword-search">
+                Search
+              </button>
+            </form>
+
+            <div id="keyword-search-results" style="margin-top: 1.5rem;">
+              <div class="empty-state-text">Enter a keyword above to search through your history.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Collapsible Search Insights -->
+        <div>
+          <button class="insights-toggle-btn" id="btn-toggle-insights" aria-expanded="false" aria-controls="insights-panel">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="insights-chevron">
+              <polyline points="9 18 15 12 9 6"></polyline>
+            </svg>
+            <span>Show Search Insights</span>
+          </button>
+
+          <div class="insights-panel" id="insights-panel">
+            <h3 style="font-size: 0.95rem; font-weight: 600; margin-bottom: 0.75rem;">Lookup Structure Diagnostics</h3>
+            <p style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1rem;">
+              Inspect the distribution and performance characteristics of the underlying hash table structure used for constant-time lookups.
+            </p>
+
+            <div class="insights-grid">
+              <div class="insight-metric-card">
+                <div class="insight-metric-label">Table Capacity</div>
+                <div class="insight-metric-val" id="diag-capacity">17</div>
+              </div>
+              <div class="insight-metric-card">
+                <div class="insight-metric-label">Unique Entries</div>
+                <div class="insight-metric-val" id="diag-unique">0</div>
+              </div>
+              <div class="insight-metric-card">
+                <div class="insight-metric-label">Load Factor</div>
+                <div class="insight-metric-val" id="diag-load-factor">0.00</div>
+              </div>
+              <div class="insight-metric-card">
+                <div class="insight-metric-label">Collisions</div>
+                <div class="insight-metric-val" id="diag-collisions">0</div>
+              </div>
+              <div class="insight-metric-card">
+                <div class="insight-metric-label">Longest Chain</div>
+                <div class="insight-metric-val" id="diag-longest-chain">0</div>
+              </div>
+              <div class="insight-metric-card">
+                <div class="insight-metric-label">Empty Locations</div>
+                <div class="insight-metric-val" id="diag-empty-buckets">17</div>
+              </div>
+            </div>
+
+            <div id="insight-last-query-box" style="margin-top: 1rem; display: none;">
+              <h4 style="font-size: 0.85rem; margin-bottom: 0.5rem;">Last Looked Up Key Details</h4>
+              <div class="chain-viewer" id="insight-chain-viewer"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================================================================
+           PAGE 5: Performance
+           =================================================================== -->
+      <section class="page-view" id="page-performance" role="tabpanel" aria-labelledby="tab-performance">
+        <div class="page-header">
+          <h1 class="page-title">Performance Benchmark</h1>
+          <p class="page-subtitle">Empirically compare Sequential Linear Search with Hash Table URL Lookup using real measured execution times.</p>
+        </div>
+
+        <div class="benchmark-disclaimer">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="16" x2="12" y2="12"></line>
+            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+          </svg>
+          <div>
+            <strong>Synthetic Dataset Isolation:</strong> Benchmark datasets (1,000 to 10,000 URLs) are generated dynamically in memory solely for algorithmic benchmarking. They are strictly isolated and never added to your personal browsing history.
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 class="card-title">Run Benchmark Test</h2>
+          <p class="card-subtitle">Choose the synthetic dataset size to test. Each trial performs lookups using identical targets to ensure fair comparison.</p>
+
+          <div class="benchmark-selector-group">
+            <span style="font-size: 0.88rem; font-weight: 500; color: var(--text-secondary);">Dataset size:</span>
+            <button class="size-pill-btn active" id="btn-size-1000" data-size="1000">1,000 URLs</button>
+            <button class="size-pill-btn" id="btn-size-5000" data-size="5000">5,000 URLs</button>
+            <button class="size-pill-btn" id="btn-size-10000" data-size="10000">10,000 URLs</button>
+            
+            <button class="btn btn-primary" id="btn-run-benchmark" style="margin-left: auto;">
+              <span id="btn-benchmark-text">Run Benchmark</span>
+              <span class="spinner" id="benchmark-spinner" style="display: none;"></span>
+            </button>
+          </div>
+
+          <!-- Benchmark Initial State -->
+          <div id="benchmark-initial-state" class="empty-state-text" style="padding: 2.5rem 0;">
+            No benchmark has been run yet. Select a dataset size and click "Run Benchmark" to measure real execution times.
+          </div>
+
+          <!-- Benchmark Results Container -->
+          <div class="benchmark-results-container" id="benchmark-results-container">
+            <div class="table-container" style="margin-top: 1.5rem;">
+              <table class="history-table">
+                <thead>
+                  <tr>
+                    <th>Algorithm</th>
+                    <th>Average Execution Time</th>
+                    <th>Average Comparisons</th>
+                    <th>Theoretical Complexity</th>
+                    <th>Observed Speed-up</th>
+                  </tr>
+                </thead>
+                <tbody id="benchmark-tbody">
+                  <!-- Injected via app.js -->
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Visual Bar Chart -->
+            <div class="chart-card">
+              <h3 style="font-size: 0.95rem; font-weight: 600;">Execution Time Comparison</h3>
+              <p style="font-size: 0.82rem; color: var(--text-muted);">Measured execution duration in milliseconds (lower is faster).</p>
+
+              <div class="bar-chart" id="benchmark-chart">
+                <!-- Injected via app.js -->
+              </div>
+            </div>
+
+            <p style="font-size: 0.8rem; color: var(--text-subtle); margin-top: 1rem;">
+              * Note: Measured execution times reflect actual performance on this specific hardware, operating system, and JavaScript runtime engine. Trials are averaged over 5 iterations with identical lookup targets.
+            </p>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Confirmation Modal Dialog -->
+    <div class="modal-overlay" id="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-card">
+        <h3 class="card-title" id="modal-title">Clear Browsing History</h3>
+        <p style="font-size: 0.88rem; color: var(--text-muted); margin-top: 0.5rem;" id="modal-desc">
+          Are you sure you want to clear all imported browsing records? This will reset all views and memory structures.
+        </p>
+        <div class="modal-actions">
+          <button class="btn btn-outline" id="btn-modal-cancel">Cancel</button>
+          <button class="btn btn-danger-outline" id="btn-modal-confirm" style="background-color: var(--color-danger); color: #ffffff;">
+            Yes, Clear All
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast Notifications Container -->
+    <div class="toast-container" id="toast-container" aria-live="polite"></div>
+
+    <!-- Application Script (ES Module) -->
+    <script type="module" src="./js/app.js"></script>
+  </body>
+</html>

@@ -51,6 +51,9 @@ class AppState {
     this.extensionId = null;
     this.domainStats = [];
     this.dashboardTimeRangeMs = 604800000; // default 7 days
+    this.historyTimeRangeMs = 604800000;
+    this.rawLoadedRecords = []; // Master records within selected time range
+    this.selectedWebsiteDetails = null; // { url, domain, title, isDomainLevel }
   }
 }
 
@@ -139,11 +142,14 @@ const DOM = {
   detailsTotal: document.getElementById('details-total-count'),
   detailsEarliest: document.getElementById('details-earliest-time'),
   detailsLatest: document.getElementById('details-latest-time'),
+  neighborPrevCard: document.getElementById('neighbor-prev-card'),
   neighborPrevTitle: document.getElementById('neighbor-prev-title'),
   neighborPrevUrl: document.getElementById('neighbor-prev-url'),
+  neighborNextCard: document.getElementById('neighbor-next-card'),
   neighborNextTitle: document.getElementById('neighbor-next-title'),
   neighborNextUrl: document.getElementById('neighbor-next-url'),
   historySearchInput: document.getElementById('history-search-input'),
+  historyTimeRangeSelect: document.getElementById('history-time-range-select'),
   historySortSelect: document.getElementById('history-sort-select'),
   historyLimitSelect: document.getElementById('history-limit-select'),
   btnExportJson: document.getElementById('btn-export-json'),
@@ -189,6 +195,24 @@ const DOM = {
   confirmModal: document.getElementById('confirm-modal'),
   btnModalCancel: document.getElementById('btn-modal-cancel'),
   btnModalConfirm: document.getElementById('btn-modal-confirm'),
+  websiteDetailsModal: document.getElementById('website-details-modal'),
+  btnCloseWebsiteModal: document.getElementById('btn-close-website-modal'),
+  btnWebsiteModalCloseAction: document.getElementById('btn-website-modal-close-action'),
+  websiteModalTitle: document.getElementById('website-modal-title'),
+  websiteModalDomain: document.getElementById('website-modal-domain'),
+  websiteModalFavicon: document.getElementById('website-modal-favicon'),
+  websiteModalLoading: document.getElementById('website-modal-loading'),
+  websiteModalNotice: document.getElementById('website-modal-notice'),
+  websiteModalNoticeText: document.getElementById('website-modal-notice-text'),
+  websiteModalContent: document.getElementById('website-modal-content'),
+  websiteModalUrlBox: document.getElementById('website-url-box'),
+  websiteModalUrl: document.getElementById('website-modal-url'),
+  websiteModalTotalVisits: document.getElementById('website-modal-total-visits'),
+  websiteModalPeriodText: document.getElementById('website-modal-period-text'),
+  websiteModalEarliest: document.getElementById('website-modal-earliest'),
+  websiteModalLatest: document.getElementById('website-modal-latest'),
+  websiteModalVisitCount: document.getElementById('website-modal-visit-count'),
+  websiteModalVisitsList: document.getElementById('website-modal-visits-list'),
   toastContainer: document.getElementById('toast-container'),
 };
 
@@ -252,10 +276,38 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
+function parseTimestampToMs(val) {
+  if (val === null || val === undefined || val === '') return NaN;
+  if (typeof val === 'number') {
+    if (val > 1e14) return Math.floor(val / 1000);
+    if (val < 1e11) return Math.floor(val * 1000);
+    return Math.floor(val);
+  }
+  const str = String(val).trim();
+  const num = Number(str);
+  if (!isNaN(num) && num > 0) {
+    if (num > 1e14) return Math.floor(num / 1000);
+    if (num < 1e11) return Math.floor(num * 1000);
+    return Math.floor(num);
+  }
+  const d = new Date(str);
+  const time = d.getTime();
+  return isNaN(time) ? NaN : time;
+}
+
+function safeIsoString(val) {
+  const ms = parseTimestampToMs(val);
+  if (!isNaN(ms) && ms > 0) {
+    return new Date(ms).toISOString();
+  }
+  return new Date().toISOString();
+}
+
 function formatDate(isoString) {
   if (!isoString) return '--';
-  const d = new Date(isoString);
-  if (isNaN(d.getTime())) return String(isoString);
+  const ms = parseTimestampToMs(isoString);
+  if (isNaN(ms) || ms <= 0) return typeof isoString === 'string' && isoString.trim() ? isoString : '--';
+  const d = new Date(ms);
   return d.toLocaleString(undefined, {
     month: 'short',
     day: 'numeric',
@@ -337,7 +389,7 @@ function processJsonString(content, sourceName = 'file') {
     state.evictedCount = 0;
     state.selectedHistoryId = null;
 
-    let validCount = 0;
+    const validRecords = [];
 
     for (let i = 0; i < rawList.length; i++) {
       const item = rawList[i];
@@ -350,33 +402,19 @@ function processJsonString(content, sourceName = 'file') {
       let title = item.title || item.Title || extractDomain(url);
       if (typeof title !== 'string') title = String(title);
 
-      let visitedAt = '';
-      if (typeof item.time_usec === 'number') {
-        // Chrome Takeout: microseconds since 1970
-        visitedAt = new Date(item.time_usec / 1000).toISOString();
-      } else if (item.visitedAt) {
-        visitedAt = new Date(item.visitedAt).toISOString();
-      } else if (item.time || item.timestamp) {
-        const rawTime = item.time || item.timestamp;
-        const parsedTime = new Date(rawTime);
-        visitedAt = !isNaN(parsedTime.getTime()) ? parsedTime.toISOString() : new Date().toISOString();
-      } else {
-        visitedAt = new Date().toISOString();
-      }
+      let rawTime = item.time_usec || item.visitedAt || item.time || item.timestamp;
+      let visitedAt = safeIsoString(rawTime);
 
-      const record = {
+      validRecords.push({
         id: `rec_${Date.now()}_${i}`,
         url,
         title,
         visitedAt,
-      };
-
-      state.historyList.addLast(record);
-      state.urlIndex.recordVisit(url, title, visitedAt);
-      validCount++;
+        visitCount: item.visitCount || 1,
+      });
     }
 
-    if (validCount === 0) {
+    if (validRecords.length === 0) {
       DOM.importStatus.innerHTML = `
         <div class="alert alert-error">
           <strong>No Valid Records:</strong> None of the items contained a valid 'url' field.
@@ -384,6 +422,22 @@ function processJsonString(content, sourceName = 'file') {
       `;
       return;
     }
+
+    // Sort chronologically ascending (oldest first)
+    validRecords.sort((a, b) => {
+      const tA = parseTimestampToMs(a.visitedAt) || 0;
+      const tB = parseTimestampToMs(b.visitedAt) || 0;
+      return tA - tB;
+    });
+
+    state.rawLoadedRecords = [...validRecords];
+
+    for (let i = 0; i < validRecords.length; i++) {
+      const record = validRecords[i];
+      state.historyList.addLast(record);
+      state.urlIndex.recordVisit(record.url, record.title, record.visitedAt);
+    }
+    const validCount = validRecords.length;
 
     // Apply history size limit if set
     applyHistoryLimit();
@@ -770,6 +824,79 @@ async function refreshDashboardData() {
   }
 }
 
+function setTimeRange(timeRangeMs) {
+  const ms = parseInt(timeRangeMs, 10);
+  state.historyTimeRangeMs = ms;
+  state.dashboardTimeRangeMs = ms;
+
+  if (DOM.historyTimeRangeSelect && DOM.historyTimeRangeSelect.value !== String(ms)) {
+    DOM.historyTimeRangeSelect.value = String(ms);
+  }
+  if (DOM.dashboardTimeRange && DOM.dashboardTimeRange.value !== String(ms)) {
+    DOM.dashboardTimeRange.value = String(ms);
+  }
+
+  if (state.extensionConnected) {
+    refreshDashboardData();
+  } else {
+    repopulateFromRawRecords();
+  }
+
+  // Update website visit details if modal is currently open
+  if (state.selectedWebsiteDetails && DOM.websiteDetailsModal && DOM.websiteDetailsModal.classList.contains('open')) {
+    loadWebsiteVisitDetails(state.selectedWebsiteDetails);
+  }
+}
+
+function repopulateFromRawRecords() {
+  if (!state.rawLoadedRecords || state.rawLoadedRecords.length === 0) {
+    state.historyList.clear();
+    state.urlIndex.clear();
+    state.evictedCount = 0;
+    state.selectedHistoryId = null;
+    renderDashboard();
+    renderHistoryTable();
+    renderDiagnostics();
+    updateHeaderStatus();
+    return;
+  }
+
+  const startTime = state.dashboardTimeRangeMs > 0 ? Date.now() - state.dashboardTimeRangeMs : 0;
+  const filtered = state.rawLoadedRecords.filter((r) => {
+    if (!r || !r.url) return false;
+    if (startTime > 0) {
+      const ms = parseTimestampToMs(r.visitedAt);
+      if (!isNaN(ms) && ms > 0 && ms < startTime) return false;
+    }
+    return true;
+  });
+
+  state.historyList.clear();
+  state.urlIndex.clear();
+  state.evictedCount = 0;
+  state.selectedHistoryId = null;
+
+  for (let i = 0; i < filtered.length; i++) {
+    const item = filtered[i];
+    const record = {
+      id: item.id || `rec_${i}`,
+      url: item.url,
+      title: item.title,
+      visitedAt: item.visitedAt,
+      visitCount: item.visitCount,
+    };
+    state.historyList.addLast(record);
+    state.urlIndex.recordVisit(record.url, record.title, record.visitedAt);
+  }
+
+  applyHistoryLimit();
+
+  renderDashboard();
+  renderHistoryTable();
+  renderDiagnostics();
+  updateHeaderStatus();
+}
+
 function processDirectChromeRecords(records) {
   // Clear existing data to prevent duplicate counting on refresh
   state.historyList.clear();
@@ -777,33 +904,50 @@ function processDirectChromeRecords(records) {
   state.evictedCount = 0;
   state.selectedHistoryId = null;
 
-  let validCount = 0;
+  const startTime = state.dashboardTimeRangeMs > 0 ? Date.now() - state.dashboardTimeRangeMs : 0;
+  const validRecords = [];
 
   for (let i = 0; i < records.length; i++) {
     const item = records[i];
     if (!item || !item.url) continue;
 
-    const record = {
+    const visitedMs = parseTimestampToMs(item.visitedAt);
+    if (startTime > 0 && !isNaN(visitedMs) && visitedMs > 0 && visitedMs < startTime) {
+      continue;
+    }
+
+    validRecords.push({
       id: `chrome_${Date.now()}_${i}`,
       url: item.url.trim(),
       title: item.title || extractDomain(item.url),
-      visitedAt: item.visitedAt || new Date().toISOString()
-    };
+      visitedAt: safeIsoString(item.visitedAt),
+      visitCount: item.visitCount || 1,
+    });
+  }
 
+  // Sort ascending by timestamp so DoublyLinkedList head is oldest and tail is newest
+  validRecords.sort((a, b) => {
+    const tA = parseTimestampToMs(a.visitedAt) || 0;
+    const tB = parseTimestampToMs(b.visitedAt) || 0;
+    return tA - tB;
+  });
+
+  state.rawLoadedRecords = [...validRecords];
+
+  for (let i = 0; i < validRecords.length; i++) {
+    const record = validRecords[i];
     state.historyList.addLast(record);
     state.urlIndex.recordVisit(record.url, record.title, record.visitedAt);
-    validCount++;
   }
 
   applyHistoryLimit();
 
   renderDashboard();
   renderHistoryTable();
-  renderHistoryDetails();
   renderDiagnostics();
   updateHeaderStatus();
 
-  showToast(`Loaded ${validCount.toLocaleString()} Chrome visits`);
+  showToast(`Loaded ${validRecords.length.toLocaleString()} Chrome visits`);
 }
 
 // ==========================================
@@ -972,6 +1116,16 @@ function renderDashboard() {
     });
 
     DOM.frequentSitesList.innerHTML = itemsHtml;
+
+    // Attach click listeners to frequent sites for domain-level visit inspection
+    DOM.frequentSitesList.querySelectorAll('.frequent-site-item').forEach((item) => {
+      item.addEventListener('click', () => {
+        const domain = item.getAttribute('data-domain');
+        if (domain) {
+          openWebsiteDetails({ domain, title: `Domain: ${domain}`, isDomainLevel: true });
+        }
+      });
+    });
   }
 }
 
@@ -1123,10 +1277,11 @@ function renderHistoryTable() {
     DOM.historyTbody.innerHTML = `
       <tr>
         <td colspan="4" class="empty-state-text" style="padding: 3rem 1rem;">
-          No browsing history available. Import a JSON file on the Home page to populate this view.
+          No browsing history available. Connect to Chrome or import a JSON file on the Home page to populate this view.
         </td>
       </tr>
     `;
+    renderHistoryDetails([]);
     return;
   }
 
@@ -1141,7 +1296,12 @@ function renderHistoryTable() {
   const isNewest = state.historySortOrder === 'newest';
   const sorted = MergeSort.sortHistoryByTimestamp(filtered, isNewest);
 
-  if (sorted.length === 0) {
+  // Apply size limit if configured
+  const displayedRecords = (state.historyLimit > 0 && sorted.length > state.historyLimit)
+    ? sorted.slice(0, state.historyLimit)
+    : sorted;
+
+  if (displayedRecords.length === 0) {
     DOM.historyTbody.innerHTML = `
       <tr>
         <td colspan="4" class="empty-state-text" style="padding: 2rem 1rem;">
@@ -1149,20 +1309,27 @@ function renderHistoryTable() {
         </td>
       </tr>
     `;
+    renderHistoryDetails([]);
     return;
   }
 
   // Render rows
-  DOM.historyTbody.innerHTML = sorted
+  DOM.historyTbody.innerHTML = displayedRecords
     .map((record) => {
       const isSelected = record.id === state.selectedHistoryId;
-      const visits = state.urlIndex.getVisitCount(record.url);
+      const visits = state.urlIndex.getVisitCount(record.url) || record.visitCount || 1;
 
       return `
         <tr class="${isSelected ? 'selected' : ''}" data-id="${record.id}" style="cursor: pointer;">
           <td>
             <div class="table-title">${escapeHtml(record.title || extractDomain(record.url))}</div>
-            <div class="table-url" title="${escapeHtml(record.url)}">${escapeHtml(record.url)}</div>
+            <button type="button" class="table-url-btn" data-url="${escapeHtml(record.url)}" data-title="${escapeHtml(record.title || extractDomain(record.url))}" title="Click to view visit details for this website">
+              <svg class="url-link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+              </svg>
+              <span>${escapeHtml(record.url)}</span>
+            </button>
           </td>
           <td>${formatDate(record.visitedAt)}</td>
           <td><span class="badge-count">${visits}</span></td>
@@ -1179,10 +1346,20 @@ function renderHistoryTable() {
   // Row selection & delete listeners
   DOM.historyTbody.querySelectorAll('tr').forEach((row) => {
     row.addEventListener('click', (e) => {
-      // Don't trigger selection if user clicked the delete button
-      if (e.target.closest('.btn-delete-row')) return;
+      // Don't trigger selection if user clicked the delete button or url button
+      if (e.target.closest('.btn-delete-row') || e.target.closest('.table-url-btn')) return;
       const id = row.getAttribute('data-id');
       selectHistoryRecord(id);
+    });
+  });
+
+  // URL click listeners
+  DOM.historyTbody.querySelectorAll('.table-url-btn').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const url = btn.getAttribute('data-url');
+      const title = btn.getAttribute('data-title');
+      openWebsiteDetails({ url, title, isDomainLevel: false });
     });
   });
 
@@ -1193,55 +1370,362 @@ function renderHistoryTable() {
       deleteHistoryRecord(id);
     });
   });
+
+  // Always keep History Details in exact sync with currently displayed records
+  renderHistoryDetails(displayedRecords);
 }
 
 function selectHistoryRecord(recordId) {
   state.selectedHistoryId = recordId;
 
-  // Highlight selected row in table
+  // Highlight selected row in table and scroll into view smoothly
+  let selectedRow = null;
   DOM.historyTbody.querySelectorAll('tr').forEach((row) => {
-    row.classList.toggle('selected', row.getAttribute('data-id') === recordId);
+    const isSelected = row.getAttribute('data-id') === recordId;
+    row.classList.toggle('selected', isSelected);
+    if (isSelected) selectedRow = row;
   });
+
+  if (selectedRow) {
+    selectedRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
 
   renderHistoryDetails();
 }
 
-function renderHistoryDetails() {
-  const total = state.historyList.size();
-  DOM.detailsTotal.textContent = total.toLocaleString();
+function renderHistoryDetails(records = null) {
+  let currentRecords = records;
+  if (!currentRecords) {
+    const allRecords = state.historyList.getAllRecords();
+    let filtered = allRecords;
+    if (state.historyFilterQuery && state.historyFilterQuery.trim()) {
+      filtered = SequentialSearch.searchByKeyword(allRecords, state.historyFilterQuery).matches;
+    }
+    const isNewest = state.historySortOrder === 'newest';
+    const sorted = MergeSort.sortHistoryByTimestamp(filtered, isNewest);
+    currentRecords = (state.historyLimit > 0 && sorted.length > state.historyLimit)
+      ? sorted.slice(0, state.historyLimit)
+      : sorted;
+  }
 
-  const head = state.historyList.head ? state.historyList.head.record : null;
-  const tail = state.historyList.tail ? state.historyList.tail.record : null;
+  // 1. Total Records: exact count of currently loaded/displayed records
+  const total = currentRecords.length;
+  if (DOM.detailsTotal) {
+    DOM.detailsTotal.textContent = total.toLocaleString();
+  }
 
-  DOM.detailsEarliest.textContent = head ? formatDate(head.visitedAt) : '--';
-  DOM.detailsLatest.textContent = tail ? formatDate(tail.visitedAt) : '--';
+  // 2. Earliest Record (minimum timestamp) and Latest Record (maximum timestamp)
+  if (total === 0) {
+    if (DOM.detailsEarliest) DOM.detailsEarliest.textContent = '--';
+    if (DOM.detailsLatest) DOM.detailsLatest.textContent = '--';
+  } else {
+    let minMs = Infinity;
+    let maxMs = -Infinity;
 
-  if (!state.selectedHistoryId) {
-    DOM.neighborPrevTitle.textContent = 'None selected';
-    DOM.neighborPrevUrl.textContent = 'Click any row in the table below to inspect neighbours';
-    DOM.neighborNextTitle.textContent = 'None selected';
-    DOM.neighborNextUrl.textContent = 'Click any row in the table below to inspect neighbours';
+    for (let i = 0; i < currentRecords.length; i++) {
+      const ms = parseTimestampToMs(currentRecords[i].visitedAt);
+      if (!isNaN(ms) && ms > 0) {
+        if (ms < minMs) minMs = ms;
+        if (ms > maxMs) maxMs = ms;
+      }
+    }
+
+    if (DOM.detailsEarliest) {
+      DOM.detailsEarliest.textContent = minMs !== Infinity ? formatDate(new Date(minMs).toISOString()) : '--';
+    }
+    if (DOM.detailsLatest) {
+      DOM.detailsLatest.textContent = maxMs !== -Infinity ? formatDate(new Date(maxMs).toISOString()) : '--';
+    }
+  }
+
+  // 3. Previous Page (Older) and Next Page (Newer)
+  if (total === 0) {
+    updateNeighborCard('prev', null, 'No history records available in selected range');
+    updateNeighborCard('next', null, 'No history records available in selected range');
     return;
   }
 
-  // Retrieve previous and next records via DoublyLinkedList bidirectional pointers
-  const prevRecord = state.historyList.getPreviousRecord(state.selectedHistoryId);
-  const nextRecord = state.historyList.getNextRecord(state.selectedHistoryId);
-
-  if (prevRecord) {
-    DOM.neighborPrevTitle.textContent = prevRecord.title || extractDomain(prevRecord.url);
-    DOM.neighborPrevUrl.textContent = `${prevRecord.url} (${formatDate(prevRecord.visitedAt)})`;
-  } else {
-    DOM.neighborPrevTitle.textContent = 'Start of History (Oldest)';
-    DOM.neighborPrevUrl.textContent = 'No previous record exists.';
+  if (!state.selectedHistoryId) {
+    updateNeighborCard('prev', null, 'Click any row in the table below to inspect older record');
+    updateNeighborCard('next', null, 'Click any row in the table below to inspect newer record');
+    return;
   }
 
-  if (nextRecord) {
-    DOM.neighborNextTitle.textContent = nextRecord.title || extractDomain(nextRecord.url);
-    DOM.neighborNextUrl.textContent = `${nextRecord.url} (${formatDate(nextRecord.visitedAt)})`;
+  const selectedIdx = currentRecords.findIndex((r) => r.id === state.selectedHistoryId);
+
+  if (selectedIdx === -1) {
+    state.selectedHistoryId = null;
+    updateNeighborCard('prev', null, 'Click any row in the table below to inspect older record');
+    updateNeighborCard('next', null, 'Click any row in the table below to inspect newer record');
+    return;
+  }
+
+  // Chronological traversal:
+  // If newest-first: index 0 is newest, index total-1 is oldest.
+  //   older record is at selectedIdx + 1.
+  //   newer record is at selectedIdx - 1.
+  // If oldest-first: index 0 is oldest, index total-1 is newest.
+  //   older record is at selectedIdx - 1.
+  //   newer record is at selectedIdx + 1.
+  const isNewestFirst = state.historySortOrder === 'newest';
+  const olderIdx = isNewestFirst ? selectedIdx + 1 : selectedIdx - 1;
+  const newerIdx = isNewestFirst ? selectedIdx - 1 : selectedIdx + 1;
+
+  const prevOlderRecord = (olderIdx >= 0 && olderIdx < total) ? currentRecords[olderIdx] : null;
+  const nextNewerRecord = (newerIdx >= 0 && newerIdx < total) ? currentRecords[newerIdx] : null;
+
+  if (prevOlderRecord) {
+    updateNeighborCard('prev', prevOlderRecord);
   } else {
-    DOM.neighborNextTitle.textContent = 'End of History (Latest)';
-    DOM.neighborNextUrl.textContent = 'No next record exists.';
+    updateNeighborCard('prev', null, 'No older record exists in current view', true);
+  }
+
+  if (nextNewerRecord) {
+    updateNeighborCard('next', nextNewerRecord);
+  } else {
+    updateNeighborCard('next', null, 'No newer record exists in current view', true);
+  }
+}
+
+function updateNeighborCard(type, record, emptyMessage = '', isBoundary = false) {
+  const isPrev = type === 'prev';
+  const titleEl = isPrev ? DOM.neighborPrevTitle : DOM.neighborNextTitle;
+  const urlEl = isPrev ? DOM.neighborPrevUrl : DOM.neighborNextUrl;
+  const cardEl = isPrev ? DOM.neighborPrevCard : DOM.neighborNextCard;
+
+  if (!titleEl || !urlEl) return;
+
+  if (record) {
+    titleEl.textContent = record.title || extractDomain(record.url);
+    urlEl.textContent = `${record.url} • ${formatDate(record.visitedAt)}`;
+    if (cardEl) {
+      cardEl.style.cursor = 'pointer';
+      cardEl.title = `Click to select this ${isPrev ? 'older' : 'newer'} record`;
+      cardEl.onclick = () => selectHistoryRecord(record.id);
+    }
+  } else {
+    titleEl.textContent = isBoundary
+      ? (isPrev ? 'Start of History (Oldest)' : 'End of History (Latest)')
+      : 'None selected';
+    urlEl.textContent = emptyMessage || (isPrev ? 'No older record exists.' : 'No newer record exists.');
+    if (cardEl) {
+      cardEl.style.cursor = 'default';
+      cardEl.title = '';
+      cardEl.onclick = null;
+    }
+  }
+}
+
+// ==========================================
+// Website-Specific Visit Details Modal
+// ==========================================
+function getPeriodLabel(ms) {
+  const num = parseInt(ms, 10);
+  switch (num) {
+    case 604800000: return 'Past 7 Days';
+    case 2592000000: return 'Past 1 Month';
+    case 7776000000: return 'Past 3 Months';
+    case 15552000000: return 'Past 6 Months';
+    default: return 'Selected Period';
+  }
+}
+
+function openWebsiteDetails({ url = '', domain = '', title = '', isDomainLevel = false }) {
+  if (!domain && url) {
+    domain = extractDomain(url);
+  }
+  if (!title) {
+    title = isDomainLevel ? `Domain: ${domain}` : (url || domain);
+  }
+
+  state.selectedWebsiteDetails = { url, domain, title, isDomainLevel };
+
+  if (DOM.websiteDetailsModal) {
+    DOM.websiteDetailsModal.classList.add('open');
+    DOM.websiteDetailsModal.setAttribute('aria-hidden', 'false');
+  }
+
+  loadWebsiteVisitDetails(state.selectedWebsiteDetails);
+}
+
+function closeWebsiteDetails() {
+  if (DOM.websiteDetailsModal) {
+    DOM.websiteDetailsModal.classList.remove('open');
+    DOM.websiteDetailsModal.setAttribute('aria-hidden', 'true');
+  }
+  state.selectedWebsiteDetails = null;
+}
+
+async function loadWebsiteVisitDetails(target) {
+  if (!target) return;
+  const { url, domain, title, isDomainLevel } = target;
+
+  if (DOM.websiteModalLoading) DOM.websiteModalLoading.style.display = 'flex';
+  if (DOM.websiteModalNotice) DOM.websiteModalNotice.style.display = 'none';
+  if (DOM.websiteModalContent) DOM.websiteModalContent.style.opacity = '0.4';
+
+  const periodLabel = getPeriodLabel(state.historyTimeRangeMs);
+  if (DOM.websiteModalPeriodText) DOM.websiteModalPeriodText.textContent = periodLabel;
+
+  if (DOM.websiteModalTitle) DOM.websiteModalTitle.textContent = title || (isDomainLevel ? `Domain: ${domain}` : url);
+  if (DOM.websiteModalDomain) DOM.websiteModalDomain.textContent = domain || extractDomain(url);
+  if (DOM.websiteModalFavicon) {
+    DOM.websiteModalFavicon.src = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain || extractDomain(url))}&sz=32`;
+  }
+
+  if (DOM.websiteModalUrlBox) {
+    if (url && !isDomainLevel) {
+      DOM.websiteModalUrlBox.style.display = 'flex';
+      if (DOM.websiteModalUrl) {
+        DOM.websiteModalUrl.textContent = url;
+        DOM.websiteModalUrl.title = url;
+      }
+    } else {
+      DOM.websiteModalUrlBox.style.display = 'none';
+    }
+  }
+
+  let resultData = null;
+  let noticeMessage = null;
+
+  // 1. Try to fetch actual visits from Chrome extension if connected
+  if (state.extensionConnected) {
+    try {
+      const response = await sendExtensionMessage({
+        action: 'RETRIEVE_URL_DETAILS',
+        options: {
+          url: isDomainLevel ? '' : url,
+          domain: isDomainLevel ? domain : '',
+          timeRangeMs: state.historyTimeRangeMs,
+        },
+      });
+
+      if (response && response.success) {
+        resultData = response;
+      } else {
+        noticeMessage = response?.error || 'Could not retrieve visit details from Chrome History.';
+      }
+    } catch (err) {
+      noticeMessage = `Extension request failed: ${err.message}. Showing local dataset records.`;
+    }
+  } else {
+    noticeMessage = 'Extension is currently disconnected. Showing visits available in loaded history dataset.';
+  }
+
+  // 2. Fallback / offline calculation from state.rawLoadedRecords / state.historyList
+  if (!resultData) {
+    const startTime = state.historyTimeRangeMs > 0 ? Date.now() - state.historyTimeRangeMs : 0;
+    const pool = (state.rawLoadedRecords && state.rawLoadedRecords.length > 0)
+      ? state.rawLoadedRecords
+      : state.historyList.getAllRecords();
+
+    const matchingVisits = [];
+    const seenTimes = new Set();
+
+    for (let i = 0; i < pool.length; i++) {
+      const r = pool[i];
+      if (!r || !r.url) continue;
+
+      let isMatch = false;
+      if (isDomainLevel) {
+        isMatch = extractDomain(r.url).toLowerCase() === domain.toLowerCase();
+      } else {
+        isMatch = r.url === url;
+      }
+
+      if (isMatch) {
+        const ms = parseTimestampToMs(r.visitedAt);
+        if (!isNaN(ms) && ms > 0 && (startTime === 0 || ms >= startTime)) {
+          if (!seenTimes.has(ms)) {
+            seenTimes.add(ms);
+            matchingVisits.push({
+              visitTime: ms,
+              visitedAt: new Date(ms).toISOString(),
+              transition: 'link',
+              title: r.title || r.url,
+            });
+          }
+        }
+      }
+    }
+
+    matchingVisits.sort((a, b) => b.visitTime - a.visitTime);
+
+    let earliestTime = null;
+    let latestTime = null;
+    if (matchingVisits.length > 0) {
+      latestTime = matchingVisits[0].visitedAt;
+      earliestTime = matchingVisits[matchingVisits.length - 1].visitedAt;
+    }
+
+    resultData = {
+      success: true,
+      url: url || '',
+      title: title || (isDomainLevel ? `Domain: ${domain}` : url),
+      domain: domain || extractDomain(url),
+      totalVisits: matchingVisits.length,
+      earliestVisit: earliestTime,
+      latestVisit: latestTime,
+      visits: matchingVisits,
+    };
+  }
+
+  renderWebsiteVisitDetails(resultData, noticeMessage, isDomainLevel);
+}
+
+function renderWebsiteVisitDetails(data, noticeMessage, isDomainLevel) {
+  if (DOM.websiteModalLoading) DOM.websiteModalLoading.style.display = 'none';
+  if (DOM.websiteModalContent) DOM.websiteModalContent.style.opacity = '1';
+
+  if (DOM.websiteModalNotice && DOM.websiteModalNoticeText) {
+    if (noticeMessage) {
+      DOM.websiteModalNotice.style.display = 'flex';
+      DOM.websiteModalNoticeText.textContent = noticeMessage;
+    } else {
+      DOM.websiteModalNotice.style.display = 'none';
+    }
+  }
+
+  const totalVisits = data.totalVisits || 0;
+  if (DOM.websiteModalTotalVisits) {
+    DOM.websiteModalTotalVisits.textContent = totalVisits.toLocaleString();
+  }
+
+  if (DOM.websiteModalEarliest) {
+    DOM.websiteModalEarliest.textContent = data.earliestVisit ? formatDate(data.earliestVisit) : '--';
+  }
+
+  if (DOM.websiteModalLatest) {
+    DOM.websiteModalLatest.textContent = data.latestVisit ? formatDate(data.latestVisit) : '--';
+  }
+
+  const visits = data.visits || [];
+  if (DOM.websiteModalVisitCount) {
+    DOM.websiteModalVisitCount.textContent = visits.length.toLocaleString();
+  }
+
+  if (DOM.websiteModalVisitsList) {
+    if (visits.length === 0) {
+      DOM.websiteModalVisitsList.innerHTML = `
+        <li style="padding: 2rem 1rem; text-align: center; color: var(--text-muted); font-size: 0.86rem;">
+          No matching visit events found in Chrome history for the selected time range (${getPeriodLabel(state.historyTimeRangeMs)}).
+        </li>
+      `;
+    } else {
+      DOM.websiteModalVisitsList.innerHTML = visits.map((v) => {
+        const localFormatted = formatDate(v.visitedAt || v.visitTime);
+        const transition = v.transition ? String(v.transition) : 'visit';
+        return `
+          <li class="visit-list-item">
+            <div>
+              <div class="visit-time-local">${localFormatted}</div>
+              ${isDomainLevel && v.title ? `<div style="font-size: 0.76rem; color: var(--text-muted); max-width: 440px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(v.title)}</div>` : ''}
+            </div>
+            <span class="visit-type-badge">${escapeHtml(transition)}</span>
+          </li>
+        `;
+      }).join('');
+    }
   }
 }
 
@@ -1252,16 +1736,24 @@ function deleteHistoryRecord(recordId) {
   // Decrement visit in hash table
   state.urlIndex.decrementVisit(deleted.url);
 
+  // Remove from raw master records if present
+  if (state.rawLoadedRecords) {
+    state.rawLoadedRecords = state.rawLoadedRecords.filter((r) => r.id !== recordId);
+  }
+
   if (state.selectedHistoryId === recordId) {
     state.selectedHistoryId = null;
   }
 
   // Update views
   renderHistoryTable();
-  renderHistoryDetails();
-  renderHomeSummary();
+  renderDashboard();
   renderDiagnostics();
   updateHeaderStatus();
+
+  if (state.selectedWebsiteDetails && DOM.websiteDetailsModal && DOM.websiteDetailsModal.classList.contains('open')) {
+    loadWebsiteVisitDetails(state.selectedWebsiteDetails);
+  }
 
   showToast(`Deleted record: ${deleted.url}`);
 }
@@ -1269,12 +1761,16 @@ function deleteHistoryRecord(recordId) {
 function clearAllHistory() {
   state.historyList.clear();
   state.urlIndex.clear();
+  state.rawLoadedRecords = [];
   state.evictedCount = 0;
   state.selectedHistoryId = null;
 
-  renderHomeSummary();
+  if (DOM.websiteDetailsModal && DOM.websiteDetailsModal.classList.contains('open')) {
+    closeWebsiteDetails();
+  }
+
+  renderDashboard();
   renderHistoryTable();
-  renderHistoryDetails();
   renderDiagnostics();
   updateHeaderStatus();
 
@@ -1692,12 +2188,27 @@ function setupEventListeners() {
     renderHistoryTable();
   });
 
+  if (DOM.historyTimeRangeSelect) {
+    DOM.historyTimeRangeSelect.addEventListener('change', (e) => {
+      setTimeRange(e.target.value);
+    });
+  }
+
   DOM.historyLimitSelect.addEventListener('change', (e) => {
     state.historyLimit = parseInt(e.target.value, 10) || 0;
+    if (state.rawLoadedRecords && state.rawLoadedRecords.length > 0) {
+      state.historyList.clear();
+      state.urlIndex.clear();
+      state.evictedCount = 0;
+      for (let i = 0; i < state.rawLoadedRecords.length; i++) {
+        const item = state.rawLoadedRecords[i];
+        state.historyList.addLast(item);
+        state.urlIndex.recordVisit(item.url, item.title, item.visitedAt);
+      }
+    }
     applyHistoryLimit();
     renderHistoryTable();
-    renderHistoryDetails();
-    renderHomeSummary();
+    renderDashboard();
     renderDiagnostics();
     updateHeaderStatus();
   });
@@ -1721,6 +2232,26 @@ function setupEventListeners() {
   DOM.confirmModal.addEventListener('click', (e) => {
     if (e.target === DOM.confirmModal) {
       DOM.confirmModal.classList.remove('open');
+    }
+  });
+
+  // Website Details Modal Close Triggers
+  if (DOM.btnCloseWebsiteModal) {
+    DOM.btnCloseWebsiteModal.addEventListener('click', closeWebsiteDetails);
+  }
+  if (DOM.btnWebsiteModalCloseAction) {
+    DOM.btnWebsiteModalCloseAction.addEventListener('click', closeWebsiteDetails);
+  }
+  if (DOM.websiteDetailsModal) {
+    DOM.websiteDetailsModal.addEventListener('click', (e) => {
+      if (e.target === DOM.websiteDetailsModal) {
+        closeWebsiteDetails();
+      }
+    });
+  }
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && DOM.websiteDetailsModal && DOM.websiteDetailsModal.classList.contains('open')) {
+      closeWebsiteDetails();
     }
   });
 
@@ -1787,8 +2318,8 @@ function setupEventListeners() {
   }
 
   if (DOM.dashboardTimeRange) {
-    DOM.dashboardTimeRange.addEventListener('change', () => {
-      refreshDashboardData();
+    DOM.dashboardTimeRange.addEventListener('change', (e) => {
+      setTimeRange(e.target.value);
     });
   }
 

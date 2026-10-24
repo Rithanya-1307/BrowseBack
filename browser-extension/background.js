@@ -165,37 +165,35 @@ async function retrieveChromeHistory(options = {}) {
               (v) => v && v.visitTime !== undefined && (startTime === 0 || v.visitTime >= startTime)
             );
             if (relevantVisits.length > 0) {
+              const countInRange = relevantVisits.length;
               for (const v of relevantVisits) {
                 extractedRecords.push({
                   url: cleanUrl,
                   title: cleanTitle,
                   visitedAt: safeIsoTimestamp(v.visitTime),
-                  visitCount: item.visitCount || 1
+                  visitCount: countInRange
                 });
               }
-            } else {
-              extractedRecords.push({
-                url: cleanUrl,
-                title: cleanTitle,
-                visitedAt: safeIsoTimestamp(item.lastVisitTime),
-                visitCount: item.visitCount || 1
-              });
             }
-          } else {
+            // If relevantVisits.length === 0, no visits happened within startTime for this URL.
+            // Do not fabricate or push records outside the requested time range.
+          } else if (startTime === 0 || (item.lastVisitTime && item.lastVisitTime >= startTime)) {
             extractedRecords.push({
               url: cleanUrl,
               title: cleanTitle,
               visitedAt: safeIsoTimestamp(item.lastVisitTime),
-              visitCount: item.visitCount || 1
+              visitCount: 1
             });
           }
         } catch {
-          extractedRecords.push({
-            url: cleanUrl,
-            title: cleanTitle,
-            visitedAt: safeIsoTimestamp(item.lastVisitTime),
-            visitCount: item.visitCount || 1
-          });
+          if (startTime === 0 || (item.lastVisitTime && item.lastVisitTime >= startTime)) {
+            extractedRecords.push({
+              url: cleanUrl,
+              title: cleanTitle,
+              visitedAt: safeIsoTimestamp(item.lastVisitTime),
+              visitCount: 1
+            });
+          }
         }
       })
     );
@@ -214,12 +212,189 @@ async function retrieveChromeHistory(options = {}) {
     }
   }
 
+  // 4. Sort chronologically ascending (oldest first) so DoublyLinkedList head = oldest, tail = newest
+  uniqueRecords.sort((a, b) => {
+    const tA = new Date(a.visitedAt).getTime() || 0;
+    const tB = new Date(b.visitedAt).getTime() || 0;
+    return tA - tB;
+  });
+
   return {
     success: true,
     records: uniqueRecords,
     totalQueried: validItems.length,
     message: `Retrieved ${uniqueRecords.length} visits (${validItems.length} unique pages) from Chrome.`
   };
+}
+
+/**
+ * Retrieves actual Chrome visit events for a specific URL or domain within the requested time range.
+ */
+async function retrieveUrlDetails(options = {}) {
+  if (!chrome.history || typeof chrome.history.getVisits !== 'function') {
+    return {
+      success: false,
+      error: 'Chrome history permission not available or not granted in this browser context.'
+    };
+  }
+
+  const targetUrl = typeof options.url === 'string' ? options.url.trim() : '';
+  const targetDomain = typeof options.domain === 'string' ? options.domain.trim() : '';
+  const timeRangeMs = typeof options.timeRangeMs === 'number' ? options.timeRangeMs : 604800000;
+  const startTime = timeRangeMs > 0 ? Date.now() - timeRangeMs : 0;
+
+  if (!targetUrl && !targetDomain) {
+    return { success: false, error: 'Neither URL nor domain was provided.' };
+  }
+
+  // 1. If targetUrl is provided, query visits for this exact URL
+  if (targetUrl) {
+    let pageTitle = targetUrl;
+    try {
+      const searchRes = await new Promise((resolve) => {
+        chrome.history.search({ text: targetUrl, maxResults: 10 }, (res) => {
+          resolve(res || []);
+        });
+      });
+      const match = searchRes.find(item => item && item.url === targetUrl) || searchRes[0];
+      if (match && match.title) {
+        pageTitle = match.title;
+      }
+    } catch {
+      // Ignore search error and continue with getVisits
+    }
+
+    const rawVisits = await new Promise((resolve) => {
+      chrome.history.getVisits({ url: targetUrl }, (res) => {
+        if (chrome.runtime.lastError) {
+          resolve([]);
+        } else {
+          resolve(res || []);
+        }
+      });
+    });
+
+    // Filter strictly by startTime
+    const inRangeVisits = rawVisits.filter(
+      (v) => v && v.visitTime !== undefined && (startTime === 0 || v.visitTime >= startTime)
+    );
+
+    // Deduplicate identical timestamps for the URL
+    const seenTimes = new Set();
+    const uniqueVisits = [];
+    for (const v of inRangeVisits) {
+      if (!seenTimes.has(v.visitTime)) {
+        seenTimes.add(v.visitTime);
+        uniqueVisits.push({
+          visitTime: v.visitTime,
+          visitedAt: safeIsoTimestamp(v.visitTime),
+          transition: v.transition || 'link',
+          visitId: v.visitId
+        });
+      }
+    }
+
+    // Sort descending by timestamp (newest visit first for display)
+    uniqueVisits.sort((a, b) => b.visitTime - a.visitTime);
+
+    let earliestTime = null;
+    let latestTime = null;
+    if (uniqueVisits.length > 0) {
+      latestTime = uniqueVisits[0].visitedAt;
+      earliestTime = uniqueVisits[uniqueVisits.length - 1].visitedAt;
+    }
+
+    let domain = '';
+    try {
+      domain = new URL(targetUrl).hostname.replace(/^www\./, '');
+    } catch {
+      domain = targetUrl;
+    }
+
+    return {
+      success: true,
+      url: targetUrl,
+      title: pageTitle,
+      domain,
+      totalVisits: uniqueVisits.length,
+      earliestVisit: earliestTime,
+      latestVisit: latestTime,
+      visits: uniqueVisits,
+      timeRangeMs,
+    };
+  }
+
+  // 2. If targetDomain is provided (domain-level summary)
+  if (targetDomain) {
+    const searchRes = await new Promise((resolve) => {
+      const p = { text: targetDomain, maxResults: 500 };
+      if (startTime > 0) p.startTime = startTime;
+      chrome.history.search(p, (res) => {
+        resolve(res || []);
+      });
+    });
+
+    const matchingItems = searchRes.filter((item) => {
+      if (!item || !item.url) return false;
+      try {
+        const u = new URL(item.url);
+        return u.hostname.replace(/^www\./, '').toLowerCase() === targetDomain.toLowerCase();
+      } catch {
+        return false;
+      }
+    });
+
+    const domainVisits = [];
+    const seenKeys = new Set();
+
+    for (const item of matchingItems) {
+      const vRes = await new Promise((resolve) => {
+        chrome.history.getVisits({ url: item.url }, (res) => {
+          resolve(res || []);
+        });
+      });
+
+      const inRange = vRes.filter(
+        (v) => v && v.visitTime !== undefined && (startTime === 0 || v.visitTime >= startTime)
+      );
+
+      for (const v of inRange) {
+        const key = `${item.url}::${v.visitTime}`;
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key);
+          domainVisits.push({
+            url: item.url,
+            title: item.title || item.url,
+            visitTime: v.visitTime,
+            visitedAt: safeIsoTimestamp(v.visitTime),
+            transition: v.transition || 'link',
+          });
+        }
+      }
+    }
+
+    domainVisits.sort((a, b) => b.visitTime - a.visitTime);
+
+    let earliestTime = null;
+    let latestTime = null;
+    if (domainVisits.length > 0) {
+      latestTime = domainVisits[0].visitedAt;
+      earliestTime = domainVisits[domainVisits.length - 1].visitedAt;
+    }
+
+    return {
+      success: true,
+      url: '',
+      title: `Domain: ${targetDomain}`,
+      domain: targetDomain,
+      totalVisits: domainVisits.length,
+      earliestVisit: earliestTime,
+      latestVisit: latestTime,
+      visits: domainVisits,
+      timeRangeMs,
+      matchingPagesCount: matchingItems.length
+    };
+  }
 }
 
 // Unified message router
@@ -258,6 +433,16 @@ function handleMessage(message, sender, sendResponse) {
       .catch((err) => {
         console.error('[BrowseBack Extension] retrieveChromeHistory caught error:', err);
         sendResponse({ success: false, records: [], permissionRequired: false, error: err.message || 'Failed to retrieve Chrome history' });
+      });
+    return true; // Keep channel open for async response
+  }
+
+  if (message.action === 'RETRIEVE_URL_DETAILS') {
+    retrieveUrlDetails(message.options)
+      .then((result) => sendResponse(result))
+      .catch((err) => {
+        console.error('[BrowseBack Extension] retrieveUrlDetails caught error:', err);
+        sendResponse({ success: false, error: err.message || 'Failed to retrieve URL details from Chrome' });
       });
     return true; // Keep channel open for async response
   }

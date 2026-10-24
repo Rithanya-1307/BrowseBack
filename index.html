@@ -102,8 +102,9 @@
                 <select id="dashboard-time-range" class="select-input select-sm" aria-label="Select history time range">
                   <option value="86400000">Past 24 Hours</option>
                   <option value="604800000" selected>Past 7 Days</option>
-                  <option value="2592000000">Past 30 Days</option>
-                  <option value="7776000000">Past 90 Days</option>
+                  <option value="2592000000">Past 1 Month (30 Days)</option>
+                  <option value="7776000000">Past 3 Months (90 Days)</option>
+                  <option value="15552000000">Past 6 Months (180 Days)</option>
                   <option value="0">All Available History</option>
                 </select>
               </div>
@@ -457,12 +458,12 @@
 
           <!-- Neighbor cards for selected record -->
           <div class="neighbor-box" id="history-neighbors-box">
-            <div class="neighbor-card">
+            <div class="neighbor-card" id="neighbor-prev-card">
               <div class="neighbor-title">Previous Page (Older)</div>
               <div class="neighbor-name" id="neighbor-prev-title">None selected</div>
               <div class="neighbor-url" id="neighbor-prev-url">Click any row in the table below</div>
             </div>
-            <div class="neighbor-card">
+            <div class="neighbor-card" id="neighbor-next-card">
               <div class="neighbor-title">Next Page (Newer)</div>
               <div class="neighbor-name" id="neighbor-next-title">None selected</div>
               <div class="neighbor-url" id="neighbor-next-url">Click any row in the table below</div>
@@ -477,6 +478,18 @@
           </div>
 
           <div class="history-actions">
+            <div class="time-range-control">
+              <label for="history-time-range-select">Time range:</label>
+              <select class="select-input" id="history-time-range-select" aria-label="History Time Range">
+                <option value="86400000">Past 24 Hours</option>
+                <option value="604800000" selected>Past 7 Days</option>
+                <option value="2592000000">Past 1 Month (30 Days)</option>
+                <option value="7776000000">Past 3 Months (90 Days)</option>
+                <option value="15552000000">Past 6 Months (180 Days)</option>
+                <option value="0">All Available History</option>
+              </select>
+            </div>
+
             <select class="select-input" id="history-sort-select" aria-label="Sort Order">
               <option value="newest">Newest first</option>
               <option value="oldest">Oldest first</option>
@@ -725,6 +738,78 @@
           <button class="btn btn-danger-outline" id="btn-modal-confirm" style="background-color: var(--color-danger); color: #ffffff;">
             Yes, Clear All
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Website-Specific Visit Details Modal Dialog -->
+    <div class="modal-overlay" id="website-details-modal" role="dialog" aria-modal="true" aria-labelledby="website-modal-title">
+      <div class="modal-card modal-card-lg">
+        <div class="modal-header">
+          <div class="modal-header-info">
+            <img id="website-modal-favicon" class="website-modal-favicon" src="" alt="" />
+            <div style="min-width: 0;">
+              <h3 class="card-title modal-headline" id="website-modal-title">Website Visit Details</h3>
+              <div class="modal-domain-tag" id="website-modal-domain">--</div>
+            </div>
+          </div>
+          <button type="button" class="btn-modal-close" id="btn-close-website-modal" aria-label="Close dialog">&times;</button>
+        </div>
+
+        <div class="website-modal-body">
+          <!-- Loading State -->
+          <div class="website-modal-loading" id="website-modal-loading" style="display: none;">
+            <span class="spinner" style="width: 20px; height: 20px; border-top-color: var(--color-primary);"></span>
+            <span>Retrieving actual visit events from Chrome History...</span>
+          </div>
+
+          <!-- Notice / Disconnected Alert Banner -->
+          <div class="alert alert-info" id="website-modal-notice" style="display: none; margin-bottom: 1rem; font-size: 0.8rem;">
+            <span id="website-modal-notice-text"></span>
+          </div>
+
+          <!-- Content Details Container -->
+          <div id="website-modal-content">
+            <!-- Full URL row -->
+            <div class="website-url-box" id="website-url-box">
+              <div class="website-url-label">Website URL</div>
+              <div class="website-url-text" id="website-modal-url" title="">--</div>
+            </div>
+
+            <!-- Stats Grid: 3 cards -->
+            <div class="website-stats-grid">
+              <div class="website-stat-card">
+                <div class="stat-label">Visits in Period</div>
+                <div class="stat-val" id="website-modal-total-visits">0</div>
+                <div class="stat-sub" id="website-modal-period-text">Past 7 Days</div>
+              </div>
+              <div class="website-stat-card">
+                <div class="stat-label">Earliest Visit</div>
+                <div class="stat-val stat-val-date" id="website-modal-earliest">--</div>
+                <div class="stat-sub">Minimum recorded timestamp</div>
+              </div>
+              <div class="website-stat-card">
+                <div class="stat-label">Latest Visit</div>
+                <div class="stat-val stat-val-date" id="website-modal-latest">--</div>
+                <div class="stat-sub">Maximum recorded timestamp</div>
+              </div>
+            </div>
+
+            <!-- Individual Visit Events Section -->
+            <div class="website-visits-section">
+              <div class="visits-section-header">
+                <h4 class="visits-section-title">Actual Visit Events (<span id="website-modal-visit-count">0</span>)</h4>
+                <span class="visits-section-sub">All Chrome visit timestamps in user's local timezone</span>
+              </div>
+              <div class="website-visits-list" id="website-modal-visits-list">
+                <!-- Injected via app.js -->
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-actions" style="margin-top: 1.25rem;">
+          <button type="button" class="btn btn-outline" id="btn-website-modal-close-action">Close</button>
         </div>
       </div>
     </div>

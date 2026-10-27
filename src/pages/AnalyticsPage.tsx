@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Cpu,
   Zap,
@@ -30,7 +30,7 @@ export const AnalyticsPage = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const fetchLiveAnalytics = async () => {
+  const fetchLiveAnalytics = useCallback(async () => {
     if (!isBackendConnected) return;
 
     setIsLoading(true);
@@ -45,16 +45,19 @@ export const AnalyticsPage = () => {
       if (benchRes) setBenchmark(benchRes);
       if (sumRes) setSummary(sumRes);
       if (popRes) setMergeSortedResources(popRes);
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to fetch live DSA analytics');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to fetch live DSA analytics';
+      setErrorMsg(message);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [isBackendConnected]);
 
   useEffect(() => {
-    fetchLiveAnalytics();
-  }, [isBackendConnected]);
+    void Promise.resolve().then(() => {
+      fetchLiveAnalytics();
+    });
+  }, [fetchLiveAnalytics]);
 
   // Merge sorted resources from backend
   const sortedResources =

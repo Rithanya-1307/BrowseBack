@@ -1,4 +1,4 @@
-import { useState, useEffect, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import type { Resource, ResourceCategory } from '../../types';
 import { CATEGORIES_LIST } from '../../data/initialData';
 import { Modal } from '../common/Modal';
@@ -36,7 +36,13 @@ export const ResourceModal = ({
     url?: string;
   }>({});
 
-  useEffect(() => {
+  const [prevTrigger, setPrevTrigger] = useState<{ isOpen: boolean; data?: Resource | null }>({
+    isOpen,
+    data: initialData,
+  });
+
+  if (prevTrigger.isOpen !== isOpen || prevTrigger.data !== initialData) {
+    setPrevTrigger({ isOpen, data: initialData });
     if (initialData) {
       setTitle(initialData.title);
       setUrl(initialData.url);
@@ -51,7 +57,7 @@ export const ResourceModal = ({
       setNotes('');
     }
     setErrors({});
-  }, [initialData, isOpen]);
+  }
 
   const validate = (): boolean => {
     const newErrors: { title?: string; url?: string } = {};

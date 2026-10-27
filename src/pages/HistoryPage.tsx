@@ -69,12 +69,8 @@ export const HistoryPage = () => {
   );
   const appCount = history.length - chromeCount;
 
-  // Set initial selected record for DoublyLinkedList navigation
-  useEffect(() => {
-    if (history.length > 0 && !selectedRecordId) {
-      setSelectedRecordId(history[0].id);
-    }
-  }, [history, selectedRecordId]);
+  // Derived active record ID for DoublyLinkedList navigation
+  const activeRecordId = selectedRecordId || (history.length > 0 ? history[0].id : null);
 
   // Synchronize DoublyLinkedList node navigation with backend
   const updateNodeNavigation = useCallback(
@@ -112,10 +108,12 @@ export const HistoryPage = () => {
   );
 
   useEffect(() => {
-    if (selectedRecordId) {
-      updateNodeNavigation(selectedRecordId);
+    if (activeRecordId) {
+      void Promise.resolve().then(() => {
+        updateNodeNavigation(activeRecordId);
+      });
     }
-  }, [selectedRecordId, updateNodeNavigation]);
+  }, [activeRecordId, updateNodeNavigation]);
 
   // Handle DoublyLinkedList Previous (Older Node)
   const handleStepPrevious = () => {
@@ -178,7 +176,7 @@ export const HistoryPage = () => {
       openResource(match);
     } else {
       openResource({
-        id: hist.resourceId || `hist-ref-${Date.now()}`,
+        id: hist.resourceId || `hist-ref-${hist.id}`,
         title: hist.title,
         url: hist.url,
         category: hist.category || 'General',

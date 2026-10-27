@@ -25,7 +25,7 @@ class AppState {
     // Persistent browsing history structures
     this.historyList = new DoublyLinkedList();
     this.urlIndex = new CustomHashTable(17);
-    this.historyLimit = 0; // 0 = unlimited
+    this.historyLimit = 50; // default finite limit (50 records)
     this.evictedCount = 0;
 
     // Simulated browser session navigation stacks
@@ -252,7 +252,7 @@ function switchTab(targetPageId) {
 function showToast(message, type = 'info') {
   if (!DOM.toastContainer) return;
   const toast = document.createElement('div');
-  toast.className = 'toast';
+  toast.className = `toast toast-${type}`;
   toast.textContent = message;
 
   DOM.toastContainer.appendChild(toast);
@@ -544,7 +544,7 @@ function getExtensionId() {
   const fromDom = document.documentElement.getAttribute('data-browseback-extension-id');
   if (fromDom) {
     state.extensionId = fromDom;
-    try { localStorage.setItem('browseback_extension_id', fromDom); } catch (e) {}
+    try { localStorage.setItem('browseback_extension_id', fromDom); } catch {}
     if (DOM.extIdInput && !DOM.extIdInput.value) DOM.extIdInput.value = fromDom;
     return fromDom;
   }
@@ -555,7 +555,7 @@ function getExtensionId() {
       if (DOM.extIdInput && !DOM.extIdInput.value) DOM.extIdInput.value = fromStorage;
       return fromStorage;
     }
-  } catch (e) {}
+  } catch {}
   if (DOM.extIdInput && DOM.extIdInput.value.trim()) {
     const fromInput = DOM.extIdInput.value.trim();
     state.extensionId = fromInput;
@@ -599,7 +599,7 @@ function setExtensionConnectionState(newState, detail = {}) {
   if (detail.version) state.extensionVersion = detail.version;
   if (detail.extensionId) {
     state.extensionId = detail.extensionId;
-    try { localStorage.setItem('browseback_extension_id', detail.extensionId); } catch (e) {}
+    try { localStorage.setItem('browseback_extension_id', detail.extensionId); } catch {}
     if (DOM.extIdInput) DOM.extIdInput.value = detail.extensionId;
   }
 
@@ -2194,28 +2194,32 @@ function setupEventListeners() {
     });
   }
 
-  DOM.historyLimitSelect.addEventListener('change', (e) => {
-    state.historyLimit = parseInt(e.target.value, 10) || 0;
-    if (state.rawLoadedRecords && state.rawLoadedRecords.length > 0) {
-      state.historyList.clear();
-      state.urlIndex.clear();
-      state.evictedCount = 0;
-      for (let i = 0; i < state.rawLoadedRecords.length; i++) {
-        const item = state.rawLoadedRecords[i];
-        state.historyList.addLast(item);
-        state.urlIndex.recordVisit(item.url, item.title, item.visitedAt);
+  if (DOM.historyLimitSelect) {
+    DOM.historyLimitSelect.addEventListener('change', (e) => {
+      state.historyLimit = parseInt(e.target.value, 10) || 50;
+      if (state.rawLoadedRecords && state.rawLoadedRecords.length > 0) {
+        state.historyList.clear();
+        state.urlIndex.clear();
+        state.evictedCount = 0;
+        for (let i = 0; i < state.rawLoadedRecords.length; i++) {
+          const item = state.rawLoadedRecords[i];
+          state.historyList.addLast(item);
+          state.urlIndex.recordVisit(item.url, item.title, item.visitedAt);
+        }
       }
-    }
-    applyHistoryLimit();
-    renderHistoryTable();
-    renderDashboard();
-    renderDiagnostics();
-    updateHeaderStatus();
-  });
+      applyHistoryLimit();
+      renderHistoryTable();
+      renderDashboard();
+      renderDiagnostics();
+      updateHeaderStatus();
+    });
+  }
 
-  DOM.btnExportJson.addEventListener('click', () => {
-    exportHistoryAsJson();
-  });
+  if (DOM.btnExportJson) {
+    DOM.btnExportJson.addEventListener('click', () => {
+      exportHistoryAsJson();
+    });
+  }
 
   DOM.btnClearHistory.addEventListener('click', () => {
     DOM.confirmModal.classList.add('open');
@@ -2341,7 +2345,7 @@ function setupEventListeners() {
       const val = DOM.extIdInput.value.trim();
       if (val) {
         state.extensionId = val;
-        try { localStorage.setItem('browseback_extension_id', val); } catch (e) {}
+        try { localStorage.setItem('browseback_extension_id', val); } catch {}
         connectChromeExtension(true);
       }
     });
@@ -2351,7 +2355,7 @@ function setupEventListeners() {
     const detail = event.detail || {};
     if (detail.extensionId) {
       state.extensionId = detail.extensionId;
-      try { localStorage.setItem('browseback_extension_id', detail.extensionId); } catch (e) {}
+      try { localStorage.setItem('browseback_extension_id', detail.extensionId); } catch {}
       if (DOM.extIdInput) DOM.extIdInput.value = detail.extensionId;
     }
     checkChromeExtensionConnection();
@@ -2362,8 +2366,12 @@ function setupEventListeners() {
 // Initialization
 // ==========================================
 function init() {
+  if (DOM.historyLimitSelect) {
+    state.historyLimit = parseInt(DOM.historyLimitSelect.value, 10) || 50;
+  }
   setupEventListeners();
   checkChromeExtensionConnection();
+  applyHistoryLimit();
   renderDashboard();
   renderBrowserView();
   renderHistoryTable();

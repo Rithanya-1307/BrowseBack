@@ -10,7 +10,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const lastSyncTimeText = document.getElementById('lastSyncTimeText');
   const lastImportCountText = document.getElementById('lastImportCountText');
-  const lastDuplicateCountText = document.getElementById('lastDuplicateCountText');
 
   const timeRangeSelect = document.getElementById('timeRangeSelect');
   const maxItemsSelect = document.getElementById('maxItemsSelect');
@@ -25,7 +24,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     backendStatusText.textContent = 'Checking...';
 
     try {
-      const res = await fetch('http://localhost:5173/', { method: 'HEAD', mode: 'no-cors' });
+      await fetch('http://localhost:5173/', { method: 'HEAD', mode: 'no-cors' });
       backendStatusBadge.className = 'status-badge status-online';
       backendStatusText.textContent = 'App Ready';
     } catch {

@@ -112,7 +112,7 @@ export const DashboardPage = () => {
       openResource(match);
     } else {
       openResource({
-        id: record.resourceId || `hist-ref-${Date.now()}`,
+        id: record.resourceId || `hist-ref-${record.id}`,
         title: record.title,
         url: record.url,
         category: record.category || 'General',

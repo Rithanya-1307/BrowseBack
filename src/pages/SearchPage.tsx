@@ -37,12 +37,14 @@ export const SearchPage = () => {
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
 
   // Sync from URL search params
-  useEffect(() => {
-    const q = searchParams.get('q');
-    if (q !== null && q !== query) {
-      setQuery(q);
+  const urlParamQuery = searchParams.get('q');
+  const [prevUrlParamQuery, setPrevUrlParamQuery] = useState(urlParamQuery);
+  if (urlParamQuery !== prevUrlParamQuery) {
+    setPrevUrlParamQuery(urlParamQuery);
+    if (urlParamQuery !== null && urlParamQuery !== query) {
+      setQuery(urlParamQuery);
     }
-  }, [searchParams]);
+  }
 
   // Execute keyword search against backend SequentialSearch DSA engine
   const executeSearch = useCallback(
@@ -168,7 +170,7 @@ export const SearchPage = () => {
       openResource(match);
     } else {
       openResource({
-        id: item.resourceId || `hist-ref-${Date.now()}`,
+        id: item.resourceId || `hist-ref-${item.id}`,
         title: item.title,
         url: item.url,
         category: item.category || 'General',

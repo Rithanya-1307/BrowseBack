@@ -498,21 +498,11 @@
             <div class="limit-control">
               <label for="history-limit-select">Size limit:</label>
               <select class="select-input" id="history-limit-select">
-                <option value="0">Unlimited</option>
                 <option value="25">25 records</option>
-                <option value="50">50 records</option>
+                <option value="50" selected>50 records</option>
                 <option value="100">100 records</option>
               </select>
             </div>
-
-            <button class="btn btn-outline" id="btn-export-json" title="Export current history as JSON">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                <polyline points="7 10 12 15 17 10"></polyline>
-                <line x1="12" y1="15" x2="12" y2="3"></line>
-              </svg>
-              Export JSON
-            </button>
 
             <button class="btn btn-danger-outline" id="btn-clear-history" title="Clear all history">
               Clear All

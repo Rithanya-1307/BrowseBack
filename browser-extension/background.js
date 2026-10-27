@@ -80,6 +80,64 @@ function isValidWebUrl(url) {
 }
 
 /**
+ * Calculates calendar-month start epoch timestamp (milliseconds).
+ * Accurately steps back exact calendar months and clamps day-of-month.
+ */
+function calculateCalendarStartTime(monthsAgo, refDate = new Date()) {
+  const targetYear = refDate.getFullYear();
+  const targetMonth = refDate.getMonth() - monthsAgo;
+  const targetDay = refDate.getDate();
+
+  const target = new Date(
+    targetYear,
+    targetMonth,
+    1,
+    refDate.getHours(),
+    refDate.getMinutes(),
+    refDate.getSeconds(),
+    refDate.getMilliseconds()
+  );
+
+  const daysInTargetMonth = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(targetDay, daysInTargetMonth));
+  return target.getTime();
+}
+
+/**
+ * Resolves start epoch timestamp for time range options.
+ * Accurately supports 7 days, 1 month, 3 months, 6 months via calendar calculations.
+ */
+function resolveStartTime(options = {}) {
+  if (typeof options.startTime === 'number' && options.startTime > 0) {
+    return options.startTime;
+  }
+
+  const rangeKey = options.timeRange || options.timeRangeKey;
+  if (rangeKey === '7d' || rangeKey === 604800000 || rangeKey === '604800000') {
+    return Date.now() - (7 * 24 * 60 * 60 * 1000);
+  }
+  if (rangeKey === '1m' || rangeKey === 2592000000 || rangeKey === '2592000000') {
+    return calculateCalendarStartTime(1);
+  }
+  if (rangeKey === '3m' || rangeKey === 7776000000 || rangeKey === '7776000000') {
+    return calculateCalendarStartTime(3);
+  }
+  if (rangeKey === '6m' || rangeKey === 15552000000 || rangeKey === '15552000000') {
+    return calculateCalendarStartTime(6);
+  }
+
+  if (typeof options.timeRangeMs === 'number' && options.timeRangeMs > 0) {
+    if (options.timeRangeMs === 2592000000) return calculateCalendarStartTime(1);
+    if (options.timeRangeMs === 7776000000) return calculateCalendarStartTime(3);
+    if (options.timeRangeMs === 15552000000) return calculateCalendarStartTime(6);
+    return Date.now() - options.timeRangeMs;
+  }
+
+  // Default: Past 7 days
+  return Date.now() - (7 * 24 * 60 * 60 * 1000);
+}
+
+/**
  * Retrieves actual Chrome browsing history records directly using the Chrome History API.
  */
 async function retrieveChromeHistory(options = {}) {
@@ -89,14 +147,14 @@ async function retrieveChromeHistory(options = {}) {
       success: false,
       records: [],
       totalQueried: 0,
+      isTruncated: false,
       permissionRequired: true,
       error: 'Chrome history permission not available or not granted in this browser context.'
     };
   }
 
-  const timeRangeMs = typeof options.timeRangeMs === 'number' ? options.timeRangeMs : 604800000; // default 7 days
-  const startTime = timeRangeMs > 0 ? Date.now() - timeRangeMs : 0;
-  const maxResults = Math.min(Math.max(parseInt(options.maxResults, 10) || 250, 1), 5000);
+  const startTime = resolveStartTime(options);
+  const maxResults = Math.min(Math.max(parseInt(options.maxResults, 10) || 50000, 1), 100000);
   const textQuery = typeof options.text === 'string' ? options.text.trim() : '';
 
   const searchParams = {
@@ -133,22 +191,43 @@ async function retrieveChromeHistory(options = {}) {
       success: true,
       records: [],
       totalQueried: historyItems.length,
+      isTruncated: historyItems.length >= maxResults,
+      truncatedLimit: maxResults,
+      startTime,
       message: 'No web browsing visits found in Chrome for the selected criteria.'
     };
   }
 
-  // 2. Fetch accurate visit timestamps for each item in batches of 20
+  // 2. Extract accurate visit events
   const extractedRecords = [];
-  const CHUNK_SIZE = 20;
+  const multiVisitItems = [];
 
-  for (let i = 0; i < validItems.length; i += CHUNK_SIZE) {
-    const chunk = validItems.slice(i, i + CHUNK_SIZE);
+  for (const item of validItems) {
+    const cleanUrl = (item.url || '').trim();
+    if (!cleanUrl) continue;
+    const cleanTitle = (item.title || '').trim() || cleanUrl;
+
+    if (item.visitCount && item.visitCount > 1) {
+      multiVisitItems.push({ cleanUrl, cleanTitle, item });
+    } else {
+      if (item.lastVisitTime && item.lastVisitTime >= startTime) {
+        extractedRecords.push({
+          url: cleanUrl,
+          title: cleanTitle,
+          visitedAt: safeIsoTimestamp(item.lastVisitTime),
+          visitTime: item.lastVisitTime,
+          visitId: item.id ? `item_${item.id}` : `${cleanUrl}::${item.lastVisitTime}`
+        });
+      }
+    }
+  }
+
+  // Fetch visit timestamps for pages with multiple visits in concurrent chunks
+  const CHUNK_SIZE = 50;
+  for (let i = 0; i < multiVisitItems.length; i += CHUNK_SIZE) {
+    const chunk = multiVisitItems.slice(i, i + CHUNK_SIZE);
     await Promise.all(
-      chunk.map(async (item) => {
-        const cleanUrl = (item.url || '').trim();
-        if (!cleanUrl) return;
-        const cleanTitle = (item.title || '').trim() || cleanUrl;
-
+      chunk.map(async ({ cleanUrl, cleanTitle, item }) => {
         try {
           const visits = await new Promise((resolve) => {
             chrome.history.getVisits({ url: cleanUrl }, (res) => {
@@ -164,34 +243,32 @@ async function retrieveChromeHistory(options = {}) {
             const relevantVisits = visits.filter(
               (v) => v && v.visitTime !== undefined && (startTime === 0 || v.visitTime >= startTime)
             );
-            if (relevantVisits.length > 0) {
-              const countInRange = relevantVisits.length;
-              for (const v of relevantVisits) {
-                extractedRecords.push({
-                  url: cleanUrl,
-                  title: cleanTitle,
-                  visitedAt: safeIsoTimestamp(v.visitTime),
-                  visitCount: countInRange
-                });
-              }
+            for (const v of relevantVisits) {
+              extractedRecords.push({
+                url: cleanUrl,
+                title: cleanTitle,
+                visitedAt: safeIsoTimestamp(v.visitTime),
+                visitTime: v.visitTime,
+                visitId: v.visitId ? `visit_${v.visitId}` : `${cleanUrl}::${v.visitTime}`
+              });
             }
-            // If relevantVisits.length === 0, no visits happened within startTime for this URL.
-            // Do not fabricate or push records outside the requested time range.
-          } else if (startTime === 0 || (item.lastVisitTime && item.lastVisitTime >= startTime)) {
+          } else if (item.lastVisitTime && item.lastVisitTime >= startTime) {
             extractedRecords.push({
               url: cleanUrl,
               title: cleanTitle,
               visitedAt: safeIsoTimestamp(item.lastVisitTime),
-              visitCount: 1
+              visitTime: item.lastVisitTime,
+              visitId: item.id ? `item_${item.id}` : `${cleanUrl}::${item.lastVisitTime}`
             });
           }
         } catch {
-          if (startTime === 0 || (item.lastVisitTime && item.lastVisitTime >= startTime)) {
+          if (item.lastVisitTime && item.lastVisitTime >= startTime) {
             extractedRecords.push({
               url: cleanUrl,
               title: cleanTitle,
               visitedAt: safeIsoTimestamp(item.lastVisitTime),
-              visitCount: 1
+              visitTime: item.lastVisitTime,
+              visitId: item.id ? `item_${item.id}` : `${cleanUrl}::${item.lastVisitTime}`
             });
           }
         }
@@ -199,13 +276,13 @@ async function retrieveChromeHistory(options = {}) {
     );
   }
 
-  // 3. Deduplicate records by URL + visitedAt
+  // 3. Deduplicate records strictly by visit event identity
   const seenKeys = new Set();
   const uniqueRecords = [];
 
   for (const rec of extractedRecords) {
     if (!rec || !rec.url) continue;
-    const key = `${rec.url}::${rec.visitedAt}`;
+    const key = rec.visitId || `${rec.url}::${rec.visitTime}`;
     if (!seenKeys.has(key)) {
       seenKeys.add(key);
       uniqueRecords.push(rec);
@@ -214,8 +291,8 @@ async function retrieveChromeHistory(options = {}) {
 
   // 4. Sort chronologically ascending (oldest first) so DoublyLinkedList head = oldest, tail = newest
   uniqueRecords.sort((a, b) => {
-    const tA = new Date(a.visitedAt).getTime() || 0;
-    const tB = new Date(b.visitedAt).getTime() || 0;
+    const tA = (typeof a.visitTime === 'number' ? a.visitTime : new Date(a.visitedAt).getTime()) || 0;
+    const tB = (typeof b.visitTime === 'number' ? b.visitTime : new Date(b.visitedAt).getTime()) || 0;
     return tA - tB;
   });
 
@@ -223,6 +300,9 @@ async function retrieveChromeHistory(options = {}) {
     success: true,
     records: uniqueRecords,
     totalQueried: validItems.length,
+    isTruncated: historyItems.length >= maxResults,
+    truncatedLimit: maxResults,
+    startTime: startTime,
     message: `Retrieved ${uniqueRecords.length} visits (${validItems.length} unique pages) from Chrome.`
   };
 }
@@ -240,8 +320,7 @@ async function retrieveUrlDetails(options = {}) {
 
   const targetUrl = typeof options.url === 'string' ? options.url.trim() : '';
   const targetDomain = typeof options.domain === 'string' ? options.domain.trim() : '';
-  const timeRangeMs = typeof options.timeRangeMs === 'number' ? options.timeRangeMs : 604800000;
-  const startTime = timeRangeMs > 0 ? Date.now() - timeRangeMs : 0;
+  const startTime = resolveStartTime(options);
 
   if (!targetUrl && !targetDomain) {
     return { success: false, error: 'Neither URL nor domain was provided.' };

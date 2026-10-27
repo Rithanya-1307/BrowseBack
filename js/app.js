@@ -50,10 +50,15 @@ class AppState {
     this.extensionVersion = '1.1.0';
     this.extensionId = null;
     this.domainStats = [];
-    this.dashboardTimeRangeMs = 604800000; // default 7 days
-    this.historyTimeRangeMs = 604800000;
-    this.rawLoadedRecords = []; // Master records within selected time range
+    this.dashboardTimeRange = '7d';
+    this.historyTimeRange = '7d';
+    this.dashboardRequestId = 0;
+    this.currentPeriodVisits = []; // Dynamic visit events for current selected range
+    this.rawLoadedRecords = []; // Master records for simulator/history
     this.selectedWebsiteDetails = null; // { url, domain, title, isDomainLevel }
+    this.isDashboardLoading = false;
+    this.hasLoadedAtLeastOnce = false;
+    this.isTruncated = false;
   }
 }
 
@@ -326,6 +331,71 @@ function extractDomain(url) {
   }
 }
 
+/**
+ * Calculates start epoch timestamp (milliseconds) by subtracting exact calendar months.
+ * Clamps day-of-month so e.g. March 31 - 1 month = Feb 28/29.
+ */
+function calculateCalendarStartTime(monthsAgo, refDate = new Date()) {
+  const targetYear = refDate.getFullYear();
+  const targetMonth = refDate.getMonth() - monthsAgo;
+  const targetDay = refDate.getDate();
+
+  const target = new Date(
+    targetYear,
+    targetMonth,
+    1,
+    refDate.getHours(),
+    refDate.getMinutes(),
+    refDate.getSeconds(),
+    refDate.getMilliseconds()
+  );
+
+  const daysInTargetMonth = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(targetDay, daysInTargetMonth));
+  return target.getTime();
+}
+
+/**
+ * Resolves start epoch timestamp for time range options:
+ * - '7d': Past 7 Days
+ * - '1m': Past 1 Month (calendar month)
+ * - '3m': Past 3 Months (calendar months)
+ * - '6m': Past 6 Months (calendar months)
+ */
+function resolveTimeRangeStartTime(rangeKey, refDate = new Date()) {
+  if (rangeKey === '7d' || rangeKey === 604800000 || rangeKey === '604800000') {
+    return refDate.getTime() - (7 * 24 * 60 * 60 * 1000);
+  }
+  if (rangeKey === '1m' || rangeKey === 2592000000 || rangeKey === '2592000000') {
+    return calculateCalendarStartTime(1, refDate);
+  }
+  if (rangeKey === '3m' || rangeKey === 7776000000 || rangeKey === '7776000000') {
+    return calculateCalendarStartTime(3, refDate);
+  }
+  if (rangeKey === '6m' || rangeKey === 15552000000 || rangeKey === '15552000000') {
+    return calculateCalendarStartTime(6, refDate);
+  }
+
+  const num = Number(rangeKey);
+  if (!isNaN(num) && num > 0) {
+    if (num === 2592000000) return calculateCalendarStartTime(1, refDate);
+    if (num === 7776000000) return calculateCalendarStartTime(3, refDate);
+    if (num === 15552000000) return calculateCalendarStartTime(6, refDate);
+    return refDate.getTime() - num;
+  }
+
+  // Default: Past 7 days
+  return refDate.getTime() - (7 * 24 * 60 * 60 * 1000);
+}
+
+function getPeriodLabel(rangeKey) {
+  if (rangeKey === '7d' || rangeKey === 604800000 || rangeKey === '604800000') return 'Past 7 Days';
+  if (rangeKey === '1m' || rangeKey === 2592000000 || rangeKey === '2592000000') return 'Past 1 Month';
+  if (rangeKey === '3m' || rangeKey === 7776000000 || rangeKey === '7776000000') return 'Past 3 Months';
+  if (rangeKey === '6m' || rangeKey === 15552000000 || rangeKey === '15552000000') return 'Past 6 Months';
+  return 'Selected Period';
+}
+
 // ==========================================
 // JSON History Import & Validation
 // ==========================================
@@ -533,6 +603,98 @@ function hideDashboardNotice() {
   if (DOM.dashboardNotice) {
     DOM.dashboardNotice.style.display = 'none';
   }
+}
+
+function setDashboardLoading(isLoading) {
+  state.isDashboardLoading = isLoading;
+
+  if (isLoading) {
+    if (DOM.dashUniqueWebsites) DOM.dashUniqueWebsites.textContent = '...';
+    if (DOM.dashSubtextUnique) DOM.dashSubtextUnique.textContent = 'Calculating distinct domains...';
+    if (DOM.dashTotalVisits) DOM.dashTotalVisits.textContent = '...';
+    if (DOM.dashSubtextVisits) DOM.dashSubtextVisits.textContent = 'Counting visit events...';
+    if (DOM.dashMostVisited) {
+      DOM.dashMostVisited.textContent = 'Loading...';
+      DOM.dashMostVisited.removeAttribute('title');
+    }
+    if (DOM.dashSubtextMostVisited) DOM.dashSubtextMostVisited.textContent = 'Ranking visit frequencies...';
+    if (DOM.dashLatestVisit) {
+      DOM.dashLatestVisit.textContent = 'Loading...';
+      DOM.dashLatestVisit.removeAttribute('title');
+    }
+    if (DOM.dashSubtextLatestVisit) DOM.dashSubtextLatestVisit.textContent = 'Querying newest timestamp...';
+
+    if (DOM.frequentSitesList) {
+      DOM.frequentSitesList.innerHTML = `
+        <div class="empty-dashboard-state" id="frequent-loading-state">
+          <div class="empty-state-icon" aria-hidden="true">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="2" x2="12" y2="6"></line>
+              <line x1="12" y1="18" x2="12" y2="22"></line>
+              <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line>
+              <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line>
+              <line x1="2" y1="12" x2="6" y2="12"></line>
+              <line x1="18" y1="12" x2="22" y2="12"></line>
+              <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line>
+              <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line>
+            </svg>
+          </div>
+          <p class="empty-state-title">Retrieving Chrome history...</p>
+          <p class="empty-state-desc">Querying actual visit events for ${getPeriodLabel(state.dashboardTimeRange)}.</p>
+        </div>
+      `;
+    }
+  }
+}
+
+function setDashboardError(errorMsg, retryFn = null) {
+  state.isDashboardLoading = false;
+  state.lastRetrievalError = errorMsg;
+
+  if (DOM.dashUniqueWebsites) DOM.dashUniqueWebsites.textContent = '--';
+  if (DOM.dashSubtextUnique) DOM.dashSubtextUnique.textContent = 'Unavailable';
+  if (DOM.dashTotalVisits) DOM.dashTotalVisits.textContent = '--';
+  if (DOM.dashSubtextVisits) DOM.dashSubtextVisits.textContent = 'Unavailable';
+  if (DOM.dashMostVisited) {
+    DOM.dashMostVisited.textContent = '--';
+    DOM.dashMostVisited.removeAttribute('title');
+  }
+  if (DOM.dashSubtextMostVisited) DOM.dashSubtextMostVisited.textContent = 'Unavailable';
+  if (DOM.dashLatestVisit) {
+    DOM.dashLatestVisit.textContent = '--';
+    DOM.dashLatestVisit.removeAttribute('title');
+  }
+  if (DOM.dashSubtextLatestVisit) DOM.dashSubtextLatestVisit.textContent = 'Unavailable';
+
+  if (DOM.frequentSitesList) {
+    DOM.frequentSitesList.innerHTML = `
+      <div class="empty-dashboard-state" id="frequent-error-state">
+        <div class="empty-state-icon" aria-hidden="true" style="color: var(--color-danger);">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="8" x2="12" y2="12"></line>
+            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+          </svg>
+        </div>
+        <p class="empty-state-title" style="color: var(--color-danger);">History Retrieval Failed</p>
+        <p class="empty-state-desc">${escapeHtml(errorMsg)}</p>
+        ${retryFn ? `<button type="button" class="btn btn-outline btn-sm" id="btn-frequent-retry" style="margin-top: 0.75rem;">Retry Retrieval</button>` : ''}
+      </div>
+    `;
+
+    const retryBtn = document.getElementById('btn-frequent-retry');
+    if (retryBtn && retryFn) {
+      retryBtn.addEventListener('click', retryFn);
+    }
+  }
+
+  showDashboardNotice({
+    title: 'Chrome History Retrieval Error',
+    desc: escapeHtml(errorMsg),
+    type: 'error',
+    actionText: retryFn ? 'Retry Retrieval' : null,
+    actionHandler: retryFn
+  });
 }
 
 // ==========================================
@@ -757,84 +919,94 @@ async function connectChromeExtension(triggerFetch = true) {
 }
 
 async function refreshDashboardData() {
+  const currentReqId = ++state.dashboardRequestId;
+
   if (DOM.btnRefreshData) DOM.btnRefreshData.disabled = true;
   if (DOM.refreshIcon) DOM.refreshIcon.style.display = 'none';
   if (DOM.refreshSpinner) DOM.refreshSpinner.style.display = 'inline-block';
   if (DOM.btnRefreshText) DOM.btnRefreshText.textContent = 'Refreshing...';
+  if (DOM.dashboardTimeRange) DOM.dashboardTimeRange.disabled = true;
 
-  const timeRangeMs = DOM.dashboardTimeRange ? parseInt(DOM.dashboardTimeRange.value, 10) : state.dashboardTimeRangeMs;
-  state.dashboardTimeRangeMs = timeRangeMs;
+  setDashboardLoading(true);
+
+  const selectedRange = DOM.dashboardTimeRange ? DOM.dashboardTimeRange.value : (state.dashboardTimeRange || '7d');
+  state.dashboardTimeRange = selectedRange;
+  state.historyTimeRange = selectedRange;
+  const startTime = resolveTimeRangeStartTime(selectedRange);
 
   try {
     const result = await sendExtensionMessage({
       action: 'RETRIEVE_HISTORY',
       options: {
-        timeRangeMs,
-        maxResults: 500
+        startTime,
+        timeRange: selectedRange,
+        maxResults: 50000
       }
     });
+
+    if (currentReqId !== state.dashboardRequestId) {
+      return; // Stale request, discard!
+    }
 
     if (result && result.success && Array.isArray(result.records)) {
       setExtensionConnectionState('connected');
-      if (result.records.length === 0) {
-        state.historyList.clear();
-        state.urlIndex.clear();
-        state.evictedCount = 0;
-        state.selectedHistoryId = null;
-        renderDashboard();
-        renderHistoryTable();
-        renderHistoryDetails();
-        renderDiagnostics();
-        updateHeaderStatus();
-        showToast('No Chrome visits found for selected criteria');
-      } else {
-        processDirectChromeRecords(result.records);
-      }
+      hideDashboardNotice();
+
+      state.currentPeriodVisits = result.records;
+      state.isTruncated = !!result.isTruncated;
+      state.hasLoadedAtLeastOnce = true;
+      state.isDashboardLoading = false;
+
+      // Update dashboard cards with the full unevicted period visits
+      renderDashboard();
+
+      // Update history table and simulator with loaded records
+      processDirectChromeRecords(result.records);
+
+      const periodLabel = getPeriodLabel(selectedRange);
+      showToast(`Retrieved ${result.records.length.toLocaleString()} Chrome visits for ${periodLabel}`);
     } else if (result && result.permissionRequired) {
       setExtensionConnectionState('permission_required');
+      setDashboardError('Chrome history permission is required. Please enable permissions in chrome://extensions.', () => refreshDashboardData());
     } else {
       const errorMsg = result?.error || 'Could not retrieve history from Chrome.';
       console.error('[BrowseBack] History retrieval failure:', errorMsg);
-      showDashboardNotice({
-        title: 'History Retrieval Failed',
-        desc: escapeHtml(errorMsg),
-        type: 'error',
-        actionText: 'Retry Refresh',
-        actionHandler: () => refreshDashboardData()
-      });
+      setDashboardError(errorMsg, () => refreshDashboardData());
       showToast('Chrome history retrieval failed', 'error');
     }
   } catch (err) {
+    if (currentReqId !== state.dashboardRequestId) {
+      return;
+    }
     console.error('[BrowseBack] History retrieval error:', err);
-    // Mark as disconnected immediately! Remove false green connected badge!
     setExtensionConnectionState('disconnected');
-    showDashboardNotice({
-      title: 'History Retrieval Failed',
-      desc: escapeHtml(err.message || 'Extension runtime communication failed.'),
-      type: 'error',
-      actionText: 'Reconnect Extension',
-      actionHandler: () => connectChromeExtension(true)
-    });
+    setDashboardError(err.message || 'Extension runtime communication failed.', () => refreshDashboardData());
     showToast(`Chrome history retrieval failed: ${err.message}`, 'error');
   } finally {
-    if (DOM.btnRefreshData) DOM.btnRefreshData.disabled = false;
-    if (DOM.refreshSpinner) DOM.refreshSpinner.style.display = 'none';
-    if (DOM.refreshIcon) DOM.refreshIcon.style.display = 'inline-block';
-    if (DOM.btnRefreshText) DOM.btnRefreshText.textContent = 'Refresh Data';
+    if (currentReqId === state.dashboardRequestId) {
+      if (DOM.btnRefreshData) DOM.btnRefreshData.disabled = false;
+      if (DOM.refreshSpinner) DOM.refreshSpinner.style.display = 'none';
+      if (DOM.refreshIcon) DOM.refreshIcon.style.display = 'inline-block';
+      if (DOM.btnRefreshText) DOM.btnRefreshText.textContent = 'Refresh Data';
+      if (DOM.dashboardTimeRange) DOM.dashboardTimeRange.disabled = false;
+    }
   }
 }
 
-function setTimeRange(timeRangeMs) {
-  const ms = parseInt(timeRangeMs, 10);
-  state.historyTimeRangeMs = ms;
-  state.dashboardTimeRangeMs = ms;
+function setTimeRange(rangeKey) {
+  state.dashboardTimeRange = rangeKey;
+  state.historyTimeRange = rangeKey;
 
-  if (DOM.historyTimeRangeSelect && DOM.historyTimeRangeSelect.value !== String(ms)) {
-    DOM.historyTimeRangeSelect.value = String(ms);
+  if (DOM.historyTimeRangeSelect && DOM.historyTimeRangeSelect.value !== rangeKey) {
+    DOM.historyTimeRangeSelect.value = rangeKey;
   }
-  if (DOM.dashboardTimeRange && DOM.dashboardTimeRange.value !== String(ms)) {
-    DOM.dashboardTimeRange.value = String(ms);
+  if (DOM.dashboardTimeRange && DOM.dashboardTimeRange.value !== rangeKey) {
+    DOM.dashboardTimeRange.value = rangeKey;
   }
+
+  // Clear previous period's visit events so stale statistics are never displayed
+  state.currentPeriodVisits = [];
+  setDashboardLoading(true);
 
   if (state.extensionConnected) {
     refreshDashboardData();
@@ -849,11 +1021,17 @@ function setTimeRange(timeRangeMs) {
 }
 
 function repopulateFromRawRecords() {
+  const currentReqId = ++state.dashboardRequestId;
+  const selectedRange = state.dashboardTimeRange || '7d';
+  const startTime = resolveTimeRangeStartTime(selectedRange);
+
   if (!state.rawLoadedRecords || state.rawLoadedRecords.length === 0) {
+    state.currentPeriodVisits = [];
     state.historyList.clear();
     state.urlIndex.clear();
     state.evictedCount = 0;
     state.selectedHistoryId = null;
+    state.isDashboardLoading = false;
     renderDashboard();
     renderHistoryTable();
     renderDiagnostics();
@@ -861,7 +1039,6 @@ function repopulateFromRawRecords() {
     return;
   }
 
-  const startTime = state.dashboardTimeRangeMs > 0 ? Date.now() - state.dashboardTimeRangeMs : 0;
   const filtered = state.rawLoadedRecords.filter((r) => {
     if (!r || !r.url) return false;
     if (startTime > 0) {
@@ -870,6 +1047,11 @@ function repopulateFromRawRecords() {
     }
     return true;
   });
+
+  if (currentReqId !== state.dashboardRequestId) return;
+
+  state.currentPeriodVisits = filtered;
+  state.isDashboardLoading = false;
 
   state.historyList.clear();
   state.urlIndex.clear();
@@ -904,17 +1086,11 @@ function processDirectChromeRecords(records) {
   state.evictedCount = 0;
   state.selectedHistoryId = null;
 
-  const startTime = state.dashboardTimeRangeMs > 0 ? Date.now() - state.dashboardTimeRangeMs : 0;
   const validRecords = [];
 
   for (let i = 0; i < records.length; i++) {
     const item = records[i];
     if (!item || !item.url) continue;
-
-    const visitedMs = parseTimestampToMs(item.visitedAt);
-    if (startTime > 0 && !isNaN(visitedMs) && visitedMs > 0 && visitedMs < startTime) {
-      continue;
-    }
 
     validRecords.push({
       id: `chrome_${Date.now()}_${i}`,
@@ -942,12 +1118,9 @@ function processDirectChromeRecords(records) {
 
   applyHistoryLimit();
 
-  renderDashboard();
   renderHistoryTable();
   renderDiagnostics();
   updateHeaderStatus();
-
-  showToast(`Loaded ${validRecords.length.toLocaleString()} Chrome visits`);
 }
 
 // ==========================================
@@ -978,43 +1151,79 @@ function applyHistoryLimit() {
 // Page 1: My Browsing Dashboard Rendering
 // ==========================================
 function renderDashboard() {
-  const records = state.historyList.toArray();
+  if (state.isDashboardLoading) return;
+
+  const records = state.currentPeriodVisits || [];
   const totalVisitsCount = records.length;
+  const selectedRange = state.dashboardTimeRange || '7d';
+  const rangeLabel = getPeriodLabel(selectedRange);
 
   if (totalVisitsCount === 0) {
-    if (DOM.dashUniqueWebsites) DOM.dashUniqueWebsites.textContent = '--';
-    if (DOM.dashSubtextUnique) DOM.dashSubtextUnique.textContent = 'Distinct domains visited';
-    if (DOM.dashTotalVisits) DOM.dashTotalVisits.textContent = '--';
-    if (DOM.dashSubtextVisits) DOM.dashSubtextVisits.textContent = 'Recorded visit events';
-    if (DOM.dashMostVisited) {
-      DOM.dashMostVisited.textContent = '--';
-      DOM.dashMostVisited.removeAttribute('title');
-    }
-    if (DOM.dashSubtextMostVisited) DOM.dashSubtextMostVisited.textContent = 'Highest visit frequency';
-    if (DOM.dashLatestVisit) {
-      DOM.dashLatestVisit.textContent = '--';
-      DOM.dashLatestVisit.removeAttribute('title');
-    }
-    if (DOM.dashSubtextLatestVisit) DOM.dashSubtextLatestVisit.textContent = 'Most recent recorded time';
+    if (state.hasLoadedAtLeastOnce) {
+      if (DOM.dashUniqueWebsites) DOM.dashUniqueWebsites.textContent = '0';
+      if (DOM.dashSubtextUnique) DOM.dashSubtextUnique.textContent = `0 distinct domains visited in ${rangeLabel}`;
+      if (DOM.dashTotalVisits) DOM.dashTotalVisits.textContent = '0';
+      if (DOM.dashSubtextVisits) DOM.dashSubtextVisits.textContent = `0 recorded visit events in ${rangeLabel}`;
+      if (DOM.dashMostVisited) {
+        DOM.dashMostVisited.textContent = 'None';
+        DOM.dashMostVisited.removeAttribute('title');
+      }
+      if (DOM.dashSubtextMostVisited) DOM.dashSubtextMostVisited.textContent = `No visits recorded in ${rangeLabel}`;
+      if (DOM.dashLatestVisit) {
+        DOM.dashLatestVisit.textContent = '--';
+        DOM.dashLatestVisit.removeAttribute('title');
+      }
+      if (DOM.dashSubtextLatestVisit) DOM.dashSubtextLatestVisit.textContent = `No visits in ${rangeLabel}`;
 
-    if (DOM.frequentSitesList) {
-      DOM.frequentSitesList.innerHTML = `
-        <div class="empty-dashboard-state" id="frequent-empty-state">
-          <div class="empty-state-icon" aria-hidden="true">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"></circle>
-              <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon>
-            </svg>
+      if (DOM.frequentSitesList) {
+        DOM.frequentSitesList.innerHTML = `
+          <div class="empty-dashboard-state" id="frequent-empty-state">
+            <div class="empty-state-icon" aria-hidden="true">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon>
+              </svg>
+            </div>
+            <p class="empty-state-title">No browsing activity recorded for ${rangeLabel}</p>
+            <p class="empty-state-desc">Zero web visits were recorded by Chrome during this time period.</p>
           </div>
-          <p class="empty-state-title">No browsing activity recorded yet</p>
-          <p class="empty-state-desc">Connect your Chrome extension or refresh data to view your top 5 most visited websites.</p>
-        </div>
-      `;
+        `;
+      }
+    } else {
+      if (DOM.dashUniqueWebsites) DOM.dashUniqueWebsites.textContent = '--';
+      if (DOM.dashSubtextUnique) DOM.dashSubtextUnique.textContent = 'Distinct domains visited';
+      if (DOM.dashTotalVisits) DOM.dashTotalVisits.textContent = '--';
+      if (DOM.dashSubtextVisits) DOM.dashSubtextVisits.textContent = 'Recorded visit events';
+      if (DOM.dashMostVisited) {
+        DOM.dashMostVisited.textContent = '--';
+        DOM.dashMostVisited.removeAttribute('title');
+      }
+      if (DOM.dashSubtextMostVisited) DOM.dashSubtextMostVisited.textContent = 'Highest visit frequency';
+      if (DOM.dashLatestVisit) {
+        DOM.dashLatestVisit.textContent = '--';
+        DOM.dashLatestVisit.removeAttribute('title');
+      }
+      if (DOM.dashSubtextLatestVisit) DOM.dashSubtextLatestVisit.textContent = 'Most recent recorded time';
+
+      if (DOM.frequentSitesList) {
+        DOM.frequentSitesList.innerHTML = `
+          <div class="empty-dashboard-state" id="frequent-empty-state">
+            <div class="empty-state-icon" aria-hidden="true">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon>
+              </svg>
+            </div>
+            <p class="empty-state-title">No browsing activity recorded yet</p>
+            <p class="empty-state-desc">Connect your Chrome extension or refresh data to view your top 5 most visited websites.</p>
+          </div>
+        `;
+      }
     }
     return;
   }
 
-  // Domain aggregation & latest visit calculation
+  // Domain aggregation & latest visit calculation over all records in this period
   const domainMap = new Map();
   let maxTimeMs = -1;
   let overallLatestDomain = null;
@@ -1028,7 +1237,7 @@ function renderDashboard() {
     if (!domain) continue;
 
     const tStr = rec.visitedAt || rec.time || '';
-    const tMs = tStr ? new Date(tStr).getTime() : 0;
+    const tMs = parseTimestampToMs(tStr);
     if (!isNaN(tMs) && tMs > maxTimeMs) {
       maxTimeMs = tMs;
       overallLatestDomain = domain;
@@ -1039,14 +1248,15 @@ function renderDashboard() {
       domainMap.set(domain, {
         domain,
         visitCount: 1,
-        latestTime: tStr
+        latestTime: tStr,
+        latestTimeMs: tMs
       });
     } else {
       const entry = domainMap.get(domain);
       entry.visitCount += 1;
-      const curEntryMs = entry.latestTime ? new Date(entry.latestTime).getTime() : 0;
-      if (!isNaN(tMs) && tMs > curEntryMs) {
+      if (!isNaN(tMs) && tMs > entry.latestTimeMs) {
         entry.latestTime = tStr;
+        entry.latestTimeMs = tMs;
       }
     }
   }
@@ -1058,10 +1268,11 @@ function renderDashboard() {
     DOM.dashSubtextUnique.textContent = `${uniqueDomainsCount.toLocaleString()} distinct website domain${uniqueDomainsCount === 1 ? '' : 's'}`;
   }
 
-  // 2. Total Visits (all visit events)
+  // 2. Total Visits (all visit events in period)
   if (DOM.dashTotalVisits) DOM.dashTotalVisits.textContent = totalVisitsCount.toLocaleString();
   if (DOM.dashSubtextVisits) {
-    DOM.dashSubtextVisits.textContent = `${totalVisitsCount.toLocaleString()} recorded visit event${totalVisitsCount === 1 ? '' : 's'}`;
+    const truncNote = state.isTruncated ? ' (query limit reached)' : '';
+    DOM.dashSubtextVisits.textContent = `${totalVisitsCount.toLocaleString()} recorded visit event${totalVisitsCount === 1 ? '' : 's'}${truncNote}`;
   }
 
   // 3. Most Visited Website (sorted with MergeSort)
@@ -1076,7 +1287,8 @@ function renderDashboard() {
       DOM.dashMostVisited.setAttribute('title', topSite.domain);
     }
     if (DOM.dashSubtextMostVisited) {
-      DOM.dashSubtextMostVisited.textContent = `${topSite.visitCount.toLocaleString()} recorded visit${topSite.visitCount === 1 ? '' : 's'}`;
+      const pct = ((topSite.visitCount / totalVisitsCount) * 100).toFixed(1);
+      DOM.dashSubtextMostVisited.textContent = `${topSite.visitCount.toLocaleString()} visits (${pct}% of period total)`;
     }
   }
 
@@ -1519,17 +1731,6 @@ function updateNeighborCard(type, record, emptyMessage = '', isBoundary = false)
 // ==========================================
 // Website-Specific Visit Details Modal
 // ==========================================
-function getPeriodLabel(ms) {
-  const num = parseInt(ms, 10);
-  switch (num) {
-    case 604800000: return 'Past 7 Days';
-    case 2592000000: return 'Past 1 Month';
-    case 7776000000: return 'Past 3 Months';
-    case 15552000000: return 'Past 6 Months';
-    default: return 'Selected Period';
-  }
-}
-
 function openWebsiteDetails({ url = '', domain = '', title = '', isDomainLevel = false }) {
   if (!domain && url) {
     domain = extractDomain(url);
@@ -1564,7 +1765,9 @@ async function loadWebsiteVisitDetails(target) {
   if (DOM.websiteModalNotice) DOM.websiteModalNotice.style.display = 'none';
   if (DOM.websiteModalContent) DOM.websiteModalContent.style.opacity = '0.4';
 
-  const periodLabel = getPeriodLabel(state.historyTimeRangeMs);
+  const currentRange = state.dashboardTimeRange || '7d';
+  const periodLabel = getPeriodLabel(currentRange);
+  const startTime = resolveTimeRangeStartTime(currentRange);
   if (DOM.websiteModalPeriodText) DOM.websiteModalPeriodText.textContent = periodLabel;
 
   if (DOM.websiteModalTitle) DOM.websiteModalTitle.textContent = title || (isDomainLevel ? `Domain: ${domain}` : url);
@@ -1596,7 +1799,8 @@ async function loadWebsiteVisitDetails(target) {
         options: {
           url: isDomainLevel ? '' : url,
           domain: isDomainLevel ? domain : '',
-          timeRangeMs: state.historyTimeRangeMs,
+          startTime,
+          timeRange: currentRange
         },
       });
 
@@ -1940,23 +2144,35 @@ async function runPerformanceBenchmark() {
 
   DOM.btnRunBenchmark.disabled = true;
   DOM.benchmarkSpinner.style.display = 'inline-block';
-  DOM.btnBenchmarkText.textContent = 'Running Benchmark...';
+  DOM.btnBenchmarkText.textContent = 'Benchmarking...';
   DOM.benchmarkInitialState.style.display = 'none';
 
-  // Allow browser paint to show spinner before CPU-bound loop
+  // Allow browser paint to show spinner before CPU-bound work
   await new Promise((resolve) => setTimeout(resolve, 50));
 
   try {
-    // 1. Generate Synthetic isolated dataset (never added to user's history!)
+    // 1. Generate Synthetic isolated dataset (strictly isolated from user's history)
     const syntheticArray = [];
-    const syntheticHashTable = new CustomHashTable(Math.floor(datasetSize / 2));
+    const initialCapacity = Math.max(17, Math.floor(datasetSize / 2));
+    const syntheticHashTable = new CustomHashTable(initialCapacity);
 
-    const domains = ['wikipedia.org', 'github.com', 'developer.mozilla.org', 'stackoverflow.com', 'arxiv.org', 'nature.com', 'acm.org'];
+    const domains = [
+      'wikipedia.org',
+      'github.com',
+      'developer.mozilla.org',
+      'stackoverflow.com',
+      'arxiv.org',
+      'nature.com',
+      'acm.org',
+      'ietf.org',
+      'w3.org',
+      'kernel.org'
+    ];
 
     for (let i = 0; i < datasetSize; i++) {
       const domain = domains[i % domains.length];
       const url = `https://${domain}/article/research-topic-${i}`;
-      const title = `Synthetic Article ${i} on ${domain}`;
+      const title = `Synthetic Benchmark Document #${i} on ${domain}`;
       const timestamp = new Date(1700000000000 + i * 1000).toISOString();
 
       const rec = { id: `bench_${i}`, url, title, visitedAt: timestamp };
@@ -1964,99 +2180,197 @@ async function runPerformanceBenchmark() {
       syntheticHashTable.recordVisit(url, title, timestamp);
     }
 
-    // Choose target URL near the 85th percentile of the dataset for fair testing
-    const targetIndex = Math.floor(datasetSize * 0.85);
-    const targetUrl = syntheticArray[targetIndex].url;
+    // 2. Build representative test workload:
+    // 50 total lookups: 40 successful (80%) spread evenly across dataset indices,
+    // plus 10 unsuccessful (20%) lookups for URLs not present in the dataset.
+    const targets = [];
+    const NUM_SUCCESSFUL = 40;
+    const NUM_UNSUCCESSFUL = 10;
 
-    // Run 5 trials of Sequential Search
-    const TRIALS = 5;
-    let seqTotalTime = 0;
+    // Distribute successful targets across the array (early, middle, late)
+    for (let k = 0; k < NUM_SUCCESSFUL; k++) {
+      const idx = Math.floor((k / NUM_SUCCESSFUL) * (datasetSize - 1));
+      targets.push({ url: syntheticArray[idx].url, shouldExist: true });
+    }
+
+    // Unsuccessful target URLs
+    for (let u = 0; u < NUM_UNSUCCESSFUL; u++) {
+      targets.push({
+        url: `https://nonexistent-benchmark-domain.org/path/missing-doc-${u}-${Date.now()}`,
+        shouldExist: false
+      });
+    }
+
+    // 3. Equivalence and Correctness Validation:
+    // Confirm both SequentialSearch and CustomHashTable return identical search results
+    for (let i = 0; i < targets.length; i++) {
+      const t = targets[i];
+      const seqRes = SequentialSearch.searchByExactUrl(syntheticArray, t.url);
+      const hashRes = syntheticHashTable.searchWithMetrics(t.url);
+
+      const seqFound = seqRes.found;
+      const hashFound = hashRes.entry !== null;
+
+      if (seqFound !== hashFound || seqFound !== t.shouldExist) {
+        throw new Error(`Algorithm validation failed for target ${t.url}: Sequential(${seqFound}) vs Hash(${hashFound})`);
+      }
+    }
+
+    // 4. Measure Execution Times Across 5 Repeated Passes
+    // High-resolution performance.now() measures ONLY the search loop.
+    const PASSES = 5;
+    const seqPassDurations = [];
     let seqTotalComparisons = 0;
 
-    for (let t = 0; t < TRIALS; t++) {
-      const res = SequentialSearch.searchByExactUrl(syntheticArray, targetUrl);
-      seqTotalTime += res.durationMs;
-      seqTotalComparisons += res.comparisonCount;
+    for (let p = 0; p < PASSES; p++) {
+      const t0 = performance.now();
+      let passComparisons = 0;
+      for (let i = 0; i < targets.length; i++) {
+        const res = SequentialSearch.searchByExactUrl(syntheticArray, targets[i].url);
+        passComparisons += res.comparisonCount;
+      }
+      const t1 = performance.now();
+      seqPassDurations.push(Math.max(0, t1 - t0));
+      if (p === 0) seqTotalComparisons = passComparisons;
     }
 
-    const avgSeqTime = seqTotalTime / TRIALS;
-    const avgSeqComp = Math.round(seqTotalComparisons / TRIALS);
-
-    // Run 5 trials of Custom Hash Table Lookup
-    let hashTotalTime = 0;
+    const hashPassDurations = [];
     let hashTotalComparisons = 0;
 
-    for (let t = 0; t < TRIALS; t++) {
-      const res = syntheticHashTable.searchWithMetrics(targetUrl);
-      hashTotalTime += res.durationMs;
-      hashTotalComparisons += res.comparisons;
+    for (let p = 0; p < PASSES; p++) {
+      const t0 = performance.now();
+      let passComparisons = 0;
+      for (let i = 0; i < targets.length; i++) {
+        const res = syntheticHashTable.searchWithMetrics(targets[i].url);
+        passComparisons += res.comparisons;
+      }
+      const t1 = performance.now();
+      hashPassDurations.push(Math.max(0, t1 - t0));
+      if (p === 0) hashTotalComparisons = passComparisons;
     }
 
-    const avgHashTime = hashTotalTime / TRIALS;
-    const avgHashComp = Math.round(hashTotalComparisons / TRIALS);
+    // Calculate median duration across the 5 passes
+    seqPassDurations.sort((a, b) => a - b);
+    hashPassDurations.sort((a, b) => a - b);
+    const medianSeqDuration = seqPassDurations[Math.floor(seqPassDurations.length / 2)];
+    const medianHashDuration = hashPassDurations[Math.floor(hashPassDurations.length / 2)];
 
-    // Speedup calculation
+    // Average per-lookup time
+    const seqTimePerLookup = medianSeqDuration / targets.length;
+    const hashTimePerLookup = medianHashDuration / targets.length;
+    const avgSeqCompPerLookup = Math.round(seqTotalComparisons / targets.length);
+    const avgHashCompPerLookup = Number((hashTotalComparisons / targets.length).toFixed(2));
+
+    // Determine faster method and honest speedup
     let speedupDisplay = '--';
-    if (avgHashTime > 0.0001 && avgSeqTime > 0) {
-      const ratio = avgSeqTime / avgHashTime;
-      speedupDisplay = `${ratio.toFixed(1)}x`;
-    } else if (avgSeqTime > 0) {
-      speedupDisplay = '> 100x';
+    let speedupExplanation = '';
+
+    if (medianSeqDuration > 0 && medianHashDuration > 0) {
+      if (medianHashDuration < medianSeqDuration) {
+        const ratio = medianSeqDuration / medianHashDuration;
+        speedupDisplay = `${ratio.toFixed(1)}x faster`;
+        speedupExplanation = `Hash table lookup was ${ratio.toFixed(1)}x faster than linear scan across ${targets.length} queries.`;
+      } else if (medianSeqDuration < medianHashDuration) {
+        const ratio = medianHashDuration / medianSeqDuration;
+        speedupDisplay = `${ratio.toFixed(1)}x faster`;
+        speedupExplanation = `Sequential search was faster on this trial run due to CPU cache locality and low branching overhead.`;
+      } else {
+        speedupDisplay = '1.0x (Parity)';
+        speedupExplanation = `Both methods completed within the measurable timer threshold.`;
+      }
+    } else if (medianSeqDuration > 0) {
+      speedupDisplay = '> 50x faster';
+      speedupExplanation = `Hash table completed sub-microsecond lookups faster than measurable timer resolution.`;
     }
+
+    // Hash table diagnostics for academic transparency
+    const hashDiag = syntheticHashTable.getDiagnostics();
 
     // Populate Results Table
     DOM.benchmarkTbody.innerHTML = `
       <tr>
-        <td><strong>Sequential Linear Search</strong></td>
-        <td>${avgSeqTime.toFixed(4)} ms</td>
-        <td>${avgSeqComp.toLocaleString()} checks</td>
+        <td>
+          <strong>Sequential Linear Search</strong>
+          <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">Linear dataset scan</div>
+        </td>
+        <td>
+          <strong>${medianSeqDuration.toFixed(4)} ms</strong>
+          <div style="font-size: 0.75rem; color: var(--text-muted);">${(seqTimePerLookup * 1000).toFixed(2)} µs / lookup</div>
+        </td>
+        <td>
+          ${avgSeqCompPerLookup.toLocaleString()} checks / lookup
+          <div style="font-size: 0.75rem; color: var(--text-muted);">${seqTotalComparisons.toLocaleString()} total</div>
+        </td>
         <td><code>O(N)</code></td>
         <td>1.0x (Baseline)</td>
       </tr>
       <tr>
-        <td><strong>Custom Hash Table Lookup</strong></td>
-        <td>${avgHashTime.toFixed(4)} ms</td>
-        <td>${avgHashComp.toLocaleString()} check${avgHashComp === 1 ? '' : 's'}</td>
+        <td>
+          <strong>Custom Hash Table Lookup</strong>
+          <div style="font-size: 0.75rem; color: var(--text-muted);">Separate chaining + rolling hash</div>
+        </td>
+        <td>
+          <strong>${medianHashDuration.toFixed(4)} ms</strong>
+          <div style="font-size: 0.75rem; color: var(--text-muted);">${(hashTimePerLookup * 1000).toFixed(2)} µs / lookup</div>
+        </td>
+        <td>
+          ${avgHashCompPerLookup} check${avgHashCompPerLookup === 1 ? '' : 's'} / lookup
+          <div style="font-size: 0.75rem; color: var(--text-muted);">${hashTotalComparisons.toLocaleString()} total</div>
+        </td>
         <td><code>O(1)</code> average</td>
         <td><strong style="color: var(--color-forward);">${speedupDisplay}</strong></td>
       </tr>
     `;
 
     // Visual Bar Chart
-    const maxTime = Math.max(avgSeqTime, avgHashTime, 0.001);
-    const seqPct = Math.min(100, Math.max(12, (avgSeqTime / maxTime) * 100));
-    const hashPct = Math.min(100, Math.max(6, (avgHashTime / maxTime) * 100));
+    const maxDuration = Math.max(medianSeqDuration, medianHashDuration, 0.001);
+    const seqPct = Math.min(100, Math.max(12, (medianSeqDuration / maxDuration) * 100));
+    const hashPct = Math.min(100, Math.max(6, (medianHashDuration / maxDuration) * 100));
 
     DOM.benchmarkChart.innerHTML = `
       <div class="chart-row">
         <div class="chart-row-label">
-          <span>Sequential Search (Linear)</span>
-          <span>${avgSeqTime.toFixed(4)} ms</span>
+          <span>Sequential Search (Linear O(N))</span>
+          <span>${medianSeqDuration.toFixed(4)} ms</span>
         </div>
         <div class="chart-track">
           <div class="chart-bar sequential-bar" style="width: ${seqPct}%;">
-            ${avgSeqTime.toFixed(3)} ms
+            ${medianSeqDuration.toFixed(3)} ms
           </div>
         </div>
       </div>
       <div class="chart-row">
         <div class="chart-row-label">
-          <span>Hash Table Lookup (Separate Chaining)</span>
-          <span>${avgHashTime.toFixed(4)} ms</span>
+          <span>Hash Table Lookup (Separate Chaining O(1))</span>
+          <span>${medianHashDuration.toFixed(4)} ms</span>
         </div>
         <div class="chart-track">
           <div class="chart-bar hash-bar" style="width: ${hashPct}%;">
-            ${avgHashTime.toFixed(4)} ms
+            ${medianHashDuration.toFixed(4)} ms
           </div>
         </div>
+      </div>
+      <div style="margin-top: 1.25rem; padding: 0.85rem 1rem; background-color: var(--bg-surface-subtle); border-radius: var(--radius-md); font-size: 0.82rem; line-height: 1.5; color: var(--text-secondary);">
+        <strong>Benchmark Test Details:</strong>
+        <ul style="margin: 0.4rem 0 0 1.2rem; padding: 0;">
+          <li><strong>Dataset:</strong> ${datasetSize.toLocaleString()} synthetic records dynamically generated in memory (isolated from personal browsing history).</li>
+          <li><strong>Trials Workload:</strong> ${targets.length} lookup trials per pass (${NUM_SUCCESSFUL} successful lookups across diverse indices, ${NUM_UNSUCCESSFUL} unsuccessful lookups).</li>
+          <li><strong>Measurement:</strong> Median of ${PASSES} repeated timing passes using <code>performance.now()</code>.</li>
+          <li><strong>Hash Diagnostics:</strong> Capacity ${hashDiag.capacity}, Load factor ${hashDiag.loadFactor}, Longest chain ${hashDiag.longestChain}, Collisions ${hashDiag.collisions}.</li>
+          <li><strong>Observation:</strong> ${speedupExplanation} Performance can vary depending on dataset size, CPU cache effects, hash collision frequency, and browser JIT runtime optimization.</li>
+        </ul>
       </div>
     `;
 
     DOM.benchmarkResultsContainer.classList.add('visible');
-    showToast(`Benchmark on ${datasetSize.toLocaleString()} URLs complete`);
+    showToast(`Benchmark complete: ${datasetSize.toLocaleString()} URLs tested across ${targets.length} queries`);
 
   } catch (err) {
+    console.error('[BrowseBack] Benchmark failure:', err);
     showToast(`Benchmark error: ${err.message}`, 'error');
+    DOM.benchmarkResultsContainer.classList.remove('visible');
+    DOM.benchmarkInitialState.style.display = 'block';
+    DOM.benchmarkInitialState.textContent = `Benchmark failed: ${err.message}. Please try again.`;
   } finally {
     DOM.btnRunBenchmark.disabled = false;
     DOM.benchmarkSpinner.style.display = 'none';

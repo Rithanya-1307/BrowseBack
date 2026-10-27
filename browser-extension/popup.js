@@ -52,7 +52,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Test History Retrieval directly in popup
   syncNowBtn.addEventListener('click', async () => {
-    const timeRangeMs = parseInt(timeRangeSelect.value, 10);
+    const timeRange = timeRangeSelect.value;
     const maxResults = parseInt(maxItemsSelect.value, 10);
 
     syncNowBtn.disabled = true;
@@ -64,7 +64,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         chrome.runtime.sendMessage(
           {
             action: 'RETRIEVE_HISTORY',
-            options: { timeRangeMs, maxResults }
+            options: { timeRange, maxResults }
           },
           (res) => resolve(res)
         );
